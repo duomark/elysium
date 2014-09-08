@@ -1,8 +1,8 @@
-%%%-----------------------------------------------------------------------
-%%% Elysium_connection_sup restarts worker processes (which each
-%%% contain a seestar Cassandra connection and a dictionary of
-%%% prepared statements).
-%%%-----------------------------------------------------------------------
+%%% @doc
+%%%   Elysium_connection_sup supervises all Cassandra connections.
+%%%   Each connection is an instance of an elysium_connection (gen_fsm)
+%%%   which holds a live seestar_session to a Cassandra database.
+%%% @end
 -module(elysium_connection_sup).
 -author('jay@duomark.com').
 
@@ -16,6 +16,11 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 -spec start_link(string(), pos_integer(), pos_integer()) -> {ok, pid()}.
+%% @doc
+%%   Start the connection supervisor for a specific Cassandra Ip + Port.
+%%   The number of connections translates to the number of children
+%%   started and maintained by the supervisor at all times.
+%% @end
 start_link(Ip, Port, Num_Connections)
   when is_list(Ip),
        is_integer(Port), Port > 0,
@@ -34,6 +39,10 @@ start_link(Ip, Port, Num_Connections)
 -spec init({string(), pos_integer(), pos_integer()})
           -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                    [supervisor:child_spec()]}}.
+%% @doc
+%%   Creates a separate one_for_one elysium_connection child for each
+%%   of the number of simultaneous connections to Cassandra desired.
+%% @end
 init({Ip, Port, Num_Connections}) ->
     Names    = [list_to_atom("elysium_connection_" ++ integer_to_list(N))
                              || N <- lists:seq(1,Num_Connections)],

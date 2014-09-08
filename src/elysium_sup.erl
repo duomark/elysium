@@ -1,9 +1,11 @@
-%%%-----------------------------------------------------------------------
-%%% Elysium consists of a gen_fsm to manage workers, and a supervisor
-%%% which launches and restarts those workers. The worker pids are
-%%% kept in a FIFO ets_buffer so that they can be retrieved and
-%%% returned easily.
-%%%-----------------------------------------------------------------------
+%%% @doc
+%%%   Elysium contains a gen_fsm which manages an ets_buffer FIFO
+%%%   queue and a set of Cassandra connection workers that are ordered
+%%%   in the queue for allocation. A simple checkin / checkout API is
+%%%   used to obtain a connection. If the checked out connection fails
+%%%   for any reason, a supervisor will replace it and place the new
+%%%   connection at the end of the queue.
+%%% @end
 -module(elysium_sup).
 -author('jay@duomark.com').
 
@@ -19,6 +21,11 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 -spec start_link() -> {ok, pid()}.
+%% @doc
+%%   Start the root supervisor. This is the one that should be started
+%%   by any including supervisor. The config/sys.config provides a set
+%%   of example parameters that the including application should specify.
+%% @end
 start_link() ->
     supervisor:start_link({local, ?SUPER}, ?MODULE, {}).
 
@@ -32,6 +39,12 @@ start_link() ->
 
 -spec init({}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                         [supervisor:child_spec()]}}.
+%% @doc
+%%   Starts the gen_fsm which owns the Cassandra connection queue,
+%%   and the supervisor of all Cassandra connections. The two are
+%%   rest_for_one so that the queue is guaranteed to exist before
+%%   any connections are created.
+%% @end
 init({}) ->
     {ok, Ip}          = application:get_env(elysium, cassandra_ip),
     {ok, Port}        = application:get_env(elysium, cassandra_port),
