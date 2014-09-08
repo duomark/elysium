@@ -25,8 +25,6 @@
           is_dedicated = true  :: boolean()
          }).
 
--define(DEFAULT_BUFFER, elysium_workers).
-
 
 %%%-----------------------------------------------------------------------
 %%% External API
@@ -35,14 +33,15 @@
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-    start_link(?DEFAULT_BUFFER, fifo, dedicated).
+    {ok, Session_Queue_Name} = application:get_env(elysium, cassandra_worker_queue),
+    start_link(Session_Queue_Name, fifo, dedicated).
     
 -spec start_link(buffer_name(), fifo | lifo, dedicated | shared) -> {ok, pid()}.
-start_link(Buffer_Name, Buffer_Type, Is_Dedicated)
-  when is_atom(Buffer_Name),
-       (Buffer_Type =:= fifo orelse Buffer_Type =:= lifo),
+start_link(Session_Queue_Name, Queue_Type, Is_Dedicated)
+  when is_atom(Session_Queue_Name),
+       (Queue_Type =:= fifo orelse Queue_Type =:= lifo),
        (Is_Dedicated =:= dedicated orelse Is_Dedicated =:= shared) ->
-    Args = {Buffer_Name, Buffer_Type, Is_Dedicated},
+    Args = {Session_Queue_Name, Queue_Type, Is_Dedicated},
     gen_fsm:start_link(?MODULE, Args, []).
 
 %% activate  (Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, activate).
@@ -53,14 +52,14 @@ start_link(Buffer_Name, Buffer_Type, Is_Dedicated)
 %%% init, code_change and terminate
 %%%-----------------------------------------------------------------------
         
-init({Buffer_Name, Buffer_Type, Is_Dedicated}) ->
+init({Queue_Name, Queue_Type, Is_Dedicated}) ->
     case Is_Dedicated of
-        dedicated -> ets_buffer:create_dedicated (Buffer_Name, Buffer_Type);
-        shared    -> ets_buffer:create           (Buffer_Name, Buffer_Type)
+        dedicated -> ets_buffer:create_dedicated (Queue_Name, Queue_Type);
+        shared    -> ets_buffer:create           (Queue_Name, Queue_Type)
     end,
     State = #ef_state{
-               buffer_name  = Buffer_Name,
-               buffer_type  = Buffer_Type,
+               buffer_name  = Queue_Name,
+               buffer_type  = Queue_Type,
                is_dedicated = (Is_Dedicated =:= dedicated)
               },
     {ok, 'INACTIVE', State}.
@@ -68,12 +67,12 @@ init({Buffer_Name, Buffer_Type, Is_Dedicated}) ->
 code_change(_Old_Vsn, State_Name, State, _Extra) -> {ok, State_Name, State}.
 
 terminate(Reason, _State_Name, #ef_state{} = State) ->
-    #ef_state{buffer_name=Buffer_Name, is_dedicated=Is_Dedicated} = State,
-    Error_Args = [?MODULE, Buffer_Name, Reason],
+    #ef_state{buffer_name=Queue_Name, is_dedicated=Is_Dedicated} = State,
+    Error_Args = [?MODULE, Queue_Name, Reason],
     error_logger:error_msg("~p for buffer ~p terminated with reason ~p", Error_Args),
     _ = case Is_Dedicated of
-            true  -> ets_buffer:delete_dedicated (Buffer_Name);
-            false -> ets_buffer:delete           (Buffer_Name)
+            true  -> ets_buffer:delete_dedicated (Queue_Name);
+            false -> ets_buffer:delete           (Queue_Name)
         end,
     ok.
 
