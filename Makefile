@@ -28,7 +28,7 @@ SERVER := erl -smp enable $(ERL_PATH)
 include erlang.mk
 
 run: all
-	$(SERVER) -s elysium
+	$(SERVER) -config config/sys.config -s elysium
 
 dev: all
 	$(SERVER) -pa test
