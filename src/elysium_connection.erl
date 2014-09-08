@@ -61,19 +61,22 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--spec checkin(pid()) -> false | pos_integer().
+-spec checkin(pid()) -> {boolean(), pos_integer()}.
 %% @doc
 %%   Checkin a seestar_session by putting it at the end of the
-%%   available connection queue. Returns false if the connection
-%%   process being checked in is dead, or the count of the number
-%%   of connections available after the checkin.
+%%   available connection queue. Returns whether the checkin was
+%%   successful (it fails if the process is dead when checkin is
+%%   attempted) and how many connections are available after the
+%%   checkin.
 %% @end
 checkin(Session_Id)
   when is_pid(Session_Id) ->
     {ok, Queue} = application:get_env(elysium, cassandra_worker_queue),
-    _ = is_process_alive(Session_Id)
-        andalso ets_buffer:write_dedicated(Queue, Session_Id).
-            
+    case is_process_alive(Session_Id) of
+        false -> {false, ets_buffer:num_entries_dedicated(Queue)};
+        true  -> {true,  ets_buffer:write_dedicated(Queue, Session_Id)}
+    end.
+    
 -spec checkout() -> pid() | none_available | {missing_ets_buffer, atom()}.
 %% @doc
 %%   Allocate a seestar_session to the caller by popping an entry
