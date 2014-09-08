@@ -33,9 +33,12 @@ start_link() ->
 -spec init({}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                         [supervisor:child_spec()]}}.
 init({}) ->
+    {ok, Ip}          = application:get_env(elysium, cassandra_ip),
+    {ok, Port}        = application:get_env(elysium, cassandra_port),
+    {ok, Num_Workers} = application:get_env(elysium, cassandra_worker_max_count),
     Procs = [
              ?CHILD(elysium_fsm),
-             ?SUPER(elysium_worker_sup, [])
+             ?SUPER(elysium_connection_sup, [Ip, Port, Num_Workers])
             ],
 
     {ok, {{rest_for_one, 10, 10}, Procs}}.
