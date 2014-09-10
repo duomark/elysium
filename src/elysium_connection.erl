@@ -1,3 +1,9 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2014, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
+%%% @reference 2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   An elysium_connection is a seestar_session gen_fsm. A
 %%%   connection to Cassandra is opened during the initialization.
@@ -17,17 +23,19 @@
 %%%   checked out connection a process death of the caller can
 %%%   safely take down the connection because the supervisor will
 %%%   immediately spawn a replacement.
+%%%
+%%% @since 0.1.0
 %%% @end
+%%%------------------------------------------------------------------------------
 -module(elysium_connection).
 -author('jay@duomark.com').
 
 %% External API
 -export([
          start_link/2, stop/1,
-         checkin/1, checkout/0
+         with_connection/3,
+         with_connection/4
         ]).
-
--define(MAX_CHECKOUT_RETRY, 20).
 
 
 %%%-----------------------------------------------------------------------
@@ -49,8 +57,11 @@
 start_link(Ip, Port)
   when is_list(Ip), is_integer(Port), Port > 0 ->
     case seestar_session:start_link(Ip, Port) of
-        {ok, Pid} -> _ = checkin(Pid), {ok, Pid};
-        Other     -> Other
+        {ok, Pid} ->
+            {ok, Queue_Name} = elysium_queue:configured_name(),
+            _ = elysium_queue:checkin(Queue_Name, Pid),
+            {ok, Pid};
+        Other -> Other
     end.
 
 -spec stop(pid()) -> ok.
@@ -61,52 +72,39 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--spec checkin(pid()) -> {boolean(), pos_integer()}.
+-type ets_buffer_name() :: atom().
+-spec with_connection(ets_buffer_name(), fun((pid(), Args) -> Result), Args)
+                     -> {error, no_db_connections}
+                            | Result when Args   :: [any()],
+                                          Result :: any().
 %% @doc
-%%   Checkin a seestar_session by putting it at the end of the
-%%   available connection queue. Returns whether the checkin was
-%%   successful (it fails if the process is dead when checkin is
-%%   attempted) and how many connections are available after the
-%%   checkin.
+%%   Obtain an active seestar_session and use it solely
+%%   for the duration required to execute a fun which
+%%   requires access to Cassandra.
 %% @end
-checkin(Session_Id)
-  when is_pid(Session_Id) ->
-    {ok, Queue} = application:get_env(elysium, cassandra_worker_queue),
-    case is_process_alive(Session_Id) of
-        false -> {false, ets_buffer:num_entries_dedicated(Queue)};
-        true  -> {true,  ets_buffer:write_dedicated(Queue, Session_Id)}
+with_connection(Queue_Name, Session_Fun, Args)
+  when is_function(Session_Fun, 2), is_list(Args) ->
+    case elysium_queue:checkout(Queue_Name) of
+        none_available       -> {error, no_db_connections};
+        Sid when is_pid(Sid) ->
+            try    Session_Fun(Sid, Args)
+            after  _ = elysium_queue:checkin(Queue_Name, Sid)
+            end
     end.
-    
--spec checkout() -> pid() | none_available | {missing_ets_buffer, atom()}.
+
+-spec with_connection(ets_buffer_name(), module(), Fun::atom(), Args::[any()])
+                     -> {error, no_db_connections} | any().
 %% @doc
-%%   Allocate a seestar_session to the caller by popping an entry
-%%   from the front of the connection queue. This function either
-%%   returns a live pid(), or none_available to indicate that all
-%%   connections to Cassandra are currently checked out.
+%%   Obtain an active seestar_session and use it solely
+%%   for the duration required to execute Mod:Fun
+%%   which requires access to Cassandra.
 %% @end
-checkout() ->
-    {ok, Queue} = application:get_env(elysium, cassandra_worker_queue),
-    fetch_pid_from_queue(Queue, 1).
-
-%% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Queue, ?MAX_CHECKOUT_RETRY) -> none_available;
-fetch_pid_from_queue( Queue, Count) ->
-    case ets_buffer:read_dedicated(Queue) of
-
-        %% Give up if there are no connections available...
-        [] -> none_available;
-
-        %% Race condition with writer, try again...
-        {missing_ets_data, Queue, _} ->
-            fetch_pid_from_queue(Queue, Count+1);
-
-        %% Return only a live pid, otherwise get the next one.
-        [Session_Id] when is_pid(Session_Id) ->
-            case is_process_alive(Session_Id) of
-                false -> fetch_pid_from_queue(Queue, Count+1);
-                true  -> Session_Id
-            end;
-
-        %% Somehow the connection buffer died, or something even worse!
-        Error -> Error
+with_connection(Queue_Name, Mod, Fun, Args)
+  when is_atom(Mod), is_atom(Fun), is_list(Args) ->
+    case elysium_queue:checkout(Queue_Name) of
+        none_available       -> {error, no_db_connections};
+        Sid when is_pid(Sid) ->
+            try    Mod:Fun(Sid, Args)
+            after  _ = elysium_queue:checkin(Queue_Name, Sid)
+            end
     end.

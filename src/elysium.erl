@@ -1,3 +1,9 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2014, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
+%%% @reference 2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   An example application is provided to start the root
 %%%   supervisor. This is insufficient to run a real application,
@@ -8,7 +14,10 @@
 %%%   included_application within a larger application. The
 %%%   elysium_sup supervisor should be started and supervised
 %%%   by another supervisor within the including application.
+%%%
+%%% @since 0.1.0
 %%% @end
+%%%------------------------------------------------------------------------------
 -module(elysium).
 -behaviour(application).
 
