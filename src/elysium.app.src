@@ -3,7 +3,7 @@
   {description, "Elysium for Cassandra"},
   {vsn, "0.1.0"},
   {id, "elysium"},
-  {registered, [elysium_sup, elysium_fsm]},
+  {registered, [elysium_sup, elysium_queue]},
   {applications, [kernel, stdlib]},
   {included_applications, [epocxy, eper, seestar]},
   {mod, {elysium, []}},

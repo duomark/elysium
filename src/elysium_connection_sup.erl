@@ -1,8 +1,17 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2014, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
+%%% @reference 2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   Elysium_connection_sup supervises all Cassandra connections.
 %%%   Each connection is an instance of an elysium_connection (gen_fsm)
 %%%   which holds a live seestar_session to a Cassandra database.
+%%%
+%%% @since 0.1.0
 %%% @end
+%%%------------------------------------------------------------------------------
 -module(elysium_connection_sup).
 -author('jay@duomark.com').
 
