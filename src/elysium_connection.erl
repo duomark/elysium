@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   An elysium_connection is a seestar_session gen_fsm. A
+%%%   An elysium_connection is a seestar_session gen_server. A
 %%%   connection to Cassandra is opened during the initialization.
 %%%   If this process ever crashes or ends, the connection is
 %%%   closed and a replacement process can optionally be spawned.
@@ -42,7 +42,7 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec start_link(string(), pos_integer()) -> {ok, pid()}.
+-spec start_link(string(), pos_integer()) -> {ok, pid()} | {error, tuple()}.
 %% @doc
 %%   Create a new seestar_session (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
@@ -61,6 +61,8 @@ start_link(Ip, Port)
             {ok, Queue_Name} = elysium_queue:configured_name(),
             _ = elysium_queue:checkin(Queue_Name, Pid),
             {ok, Pid};
+        {error, {connection_error, econnrefused}} ->
+            {error, {cassandra_not_available, [{ip, Ip}, {port, Port}]}};
         Other -> Other
     end.
 
