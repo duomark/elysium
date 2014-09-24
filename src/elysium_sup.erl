@@ -64,5 +64,4 @@ init({}) ->
              ?CHILD(elysium_queue,          [Queue_Name]),
              ?SUPER(elysium_connection_sup, [Ip, Port, Num_Workers])
             ],
-
     {ok, {{rest_for_one, 10, 10}, Procs}}.

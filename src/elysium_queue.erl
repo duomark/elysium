@@ -148,12 +148,34 @@ checkin(Queue_Name, Session_Id)
             Available = ets_buffer:num_entries_dedicated(Queue_Name),
             {false, report_available_sessions(Queue_Name, Available)};
         true ->
-            Available = ets_buffer:write_dedicated(Queue_Name, Session_Id),
-            {true,  report_available_sessions(Queue_Name, Available)}
+            case decay_causes_death(Session_Id) of
+                true  -> exit(Session_Id, kill),
+                         error_logger:error_msg("Elysium_connection pid ~p died from decay", [Session_Id]),
+                         Available = ets_buffer:num_entries_dedicated(Queue_Name),
+                         {false, report_available_sessions(Queue_Name, Available)};
+                false -> Available = ets_buffer:write_dedicated(Queue_Name, Session_Id),
+                         {true, report_available_sessions(Queue_Name, Available)}
+            end
     end.
 
 report_available_sessions( Queue_Name, {missing_ets_buffer, Queue_Name}) -> 0;
 report_available_sessions(_Queue_Name, Num_Sessions) -> Num_Sessions.
+
+decay_causes_death(_Session_Id) ->
+    case application:get_env(elysium, decay_probability, 0) of
+        0 -> false;   % No decay
+        Probability when is_integer(Probability), Probability > 0, Probability < 1000000 ->
+            _ = maybe_seed(),
+            R = random:uniform(1000000),
+            R < Probability
+    end.
+
+maybe_seed() ->
+    case get(random_seed) of
+        undefined -> random:seed(os:timestamp());
+        {X, X, X} -> random:seed(os:timestamp());
+        _         -> ok
+    end.
 
      
 %%%-----------------------------------------------------------------------

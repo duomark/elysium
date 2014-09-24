@@ -61,7 +61,7 @@ start_link(Ip, Port)
             {ok, Queue_Name} = elysium_queue:configured_name(),
             _ = elysium_queue:checkin(Queue_Name, Pid),
             {ok, Pid};
-        {error, {connection_error, econnrefused}} ->
+        {error, {connection_error, _}} ->
             {error, {cassandra_not_available, [{ip, Ip}, {port, Port}]}};
         Other -> Other
     end.
