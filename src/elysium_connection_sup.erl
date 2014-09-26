@@ -56,4 +56,4 @@ init({Ip, Port, Num_Connections}) ->
     Names    = [list_to_atom("elysium_connection_" ++ integer_to_list(N))
                              || N <- lists:seq(1,Num_Connections)],
     Children = [?CHILD(Name, elysium_connection, [Ip, Port]) || Name <- Names],
-    {ok, {{one_for_one, 10, 10}, Children}}.
+    {ok, {{one_for_one, 1000, 1}, Children}}.
