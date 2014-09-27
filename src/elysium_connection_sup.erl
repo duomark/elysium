@@ -20,23 +20,24 @@
 %% External API
 -export([start_link/3, init/1]).
 
+-include("elysium_types.hrl").
+
 
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
--spec start_link(string(), pos_integer(), pos_integer()) -> {ok, pid()}.
+-spec start_link(module(), host_list(), pos_integer()) -> {ok, pid()}.
 %% @doc
 %%   Start the connection supervisor for a specific Cassandra Ip + Port.
 %%   The number of connections translates to the number of children
 %%   started and maintained by the supervisor at all times.
 %% @end
-start_link(Ip, Port, Num_Connections)
-  when is_list(Ip),
-       is_integer(Port), Port > 0,
+start_link(Config_Module, Nodes, Num_Connections)
+  when is_atom(Config_Module), is_list(Nodes),
        is_integer(Num_Connections), Num_Connections > 0 ->
 
     supervisor:start_link({local, ?MODULE}, ?MODULE,
-                          {Ip, Port, Num_Connections}).
+                          {Config_Module, Nodes, Num_Connections}).
 
 
 %%%-----------------------------------------------------------------------
@@ -45,15 +46,22 @@ start_link(Ip, Port, Num_Connections)
 -define(CHILD(__Name, __Mod, __Args),
         {__Name, {__Mod, start_link, __Args}, permanent, 2000, worker, [__Mod]}).
 
--spec init({string(), pos_integer(), pos_integer()})
+-spec init({module(), host_list(), pos_integer()})
           -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                    [supervisor:child_spec()]}}.
 %% @doc
 %%   Creates a separate one_for_one elysium_connection child for each
 %%   of the number of simultaneous connections to Cassandra desired.
 %% @end
-init({Ip, Port, Num_Connections}) ->
-    Names    = [list_to_atom("elysium_connection_" ++ integer_to_list(N))
-                             || N <- lists:seq(1,Num_Connections)],
-    Children = [?CHILD(Name, elysium_connection, [Ip, Port]) || Name <- Names],
+init({Config_Module, Nodes, Num_Connections}) ->
+    Names = [list_to_atom("elysium_connection_" ++ integer_to_list(N))
+             || N <- lists:seq(1, Num_Connections)],
+    Node_Queue = queue:from_list([Node || {_Ip, _Port} = Node <- Nodes]),
+    Children   = make_childspecs(Config_Module, Node_Queue, Names, []),
     {ok, {{one_for_one, 1000, 1}, Children}}.
+
+make_childspecs(Config_Module, _Node_Queue,            [], Specs) -> Specs;
+make_childspecs(Config_Module,  Node_Queue, [Name | More], Specs) ->
+    {{value, {Ip, Port} = Node}, Q} = queue:out(Node_Queue),
+    New_Spec = ?CHILD(Name, elysium_connection, [Config_Module, Ip, Port]),
+    make_childspecs(Config_Module, queue:in(Node, Q), More, [New_Spec | Specs]).

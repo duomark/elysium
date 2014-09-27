@@ -21,7 +21,7 @@
 -behavior(supervisor).
 
 %% External API
--export([start_link/0, init/1]).
+-export([start_link/1, init/1]).
 
 -define(SUPER, ?MODULE).
 
@@ -29,14 +29,14 @@
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
--spec start_link() -> {ok, pid()}.
+-spec start_link(module()) -> {ok, pid()}.
 %% @doc
 %%   Start the root supervisor. This is the one that should be started
 %%   by any including supervisor. The config/sys.config provides a set
 %%   of example parameters that the including application should specify.
 %% @end
-start_link() ->
-    supervisor:start_link({local, ?SUPER}, ?MODULE, {}).
+start_link(Config_Module) ->
+    supervisor:start_link({local, ?SUPER}, ?MODULE, {Config_Module}).
 
 
 %%%-----------------------------------------------------------------------
@@ -47,21 +47,19 @@ start_link() ->
 -define(SUPER(__Mod, __Args), {__Mod,  {__Mod, start_link, __Args},
                                permanent, infinity, supervisor, [__Mod]}).
 
--spec init({}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
-                        [supervisor:child_spec()]}}.
+-spec init({module()}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
+                                [supervisor:child_spec()]}}.
 %% @doc
 %%   Starts the gen_fsm which owns the Cassandra connection queue,
-%%   and the supervisor of all Cassandra connections. The two are
+%%   and one supervisor of all Cassandra node supervisors. They are
 %%   rest_for_one so that the queue is guaranteed to exist before
 %%   any connections are created.
 %% @end
-init({}) ->
-    {ok, Ip}          = application:get_env(elysium, cassandra_ip),
-    {ok, Port}        = application:get_env(elysium, cassandra_port),
-    {ok, Num_Workers} = application:get_env(elysium, cassandra_worker_max_count),
-    {ok, Queue_Name}  = elysium_queue:configured_name(),
-    Procs = [
-             ?CHILD(elysium_queue,          [Queue_Name]),
-             ?SUPER(elysium_connection_sup, [Ip, Port, Num_Workers])
-            ],
-    {ok, {{rest_for_one, 10, 10}, Procs}}.
+init({Config_Module}) ->
+    Cassandra_Nodes = elysium_config:round_robin_hosts (Config_Module),
+    Num_Workers     = elysium_config:worker_max_count  (Config_Module),
+    Queue_Name      = elysium_config:worker_queue_name (Config_Module),
+
+    Fsm_Proc = ?CHILD(elysium_queue,          [Queue_Name]),
+    Conn_Sup = ?SUPER(elysium_connection_sup, [Config_Module, Cassandra_Nodes, Num_Workers]),
+    {ok, {{rest_for_one, 10, 10}, [Fsm_Proc, Conn_Sup]}}.

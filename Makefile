@@ -1,7 +1,7 @@
 PROJECT = elysium
 
 DEPS = eper epocxy seestar
-dep_epocxy  = git https://github.com/duomark/epocxy 0.9.7
+dep_epocxy  = git https://github.com/duomark/epocxy 0.9.8
 dep_seestar = git https://github.com/jaynel/seestar master
 V = 0
 
@@ -28,7 +28,7 @@ SERVER := erl -smp enable $(ERL_PATH)
 include erlang.mk
 
 run: all
-	$(SERVER) -config config/sys.config -s elysium
+	$(SERVER) -s elysium
 
 dev: all
 	$(SERVER) -pa test

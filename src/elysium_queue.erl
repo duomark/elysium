@@ -5,24 +5,31 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Elysium_fsm is a gen_fsm that owns a FIFO queue of Cassandra
+%%%   Elysium_fsm is a gen_fsm that owns a RING buffer of available
+%%%   Cassandra hosts and a FIFO queue of pre-allocated Cassandra
 %%%   sessions. This FSM is started before any of the Cassandra
-%%%   connections so that the ets_buffer FIFO queue can be owned by
+%%%   connections so that the ets_buffer queues can be owned by
 %%%   a process which is less volatile than the individual connections.
 %%%   A containing application can crash a connection without disrupting
 %%%   other connections, nor disrupting the smooth flow of connection
 %%%   checkin / checkout.
 %%%
-%%%   To avoid serializing requests through this gen_fsm, all queues
-%%%   are assumed to be FIFO, dedicated ets_buffers. Queue Name is
-%%%   provided by the caller to avoid an ets lookup from the application
-%%%   environment. Normally, the caller will use configured_name/0
-%%%   to get the Queue Name initially, which is then stored locally
-%%%   to the client caller and used on subsequent requests.
+%%%   To further support fault tolerance and load balancing, the configuration
+%%%   data identifies a list of Cassandra hosts to which live sessions
+%%%   may be established. The list of hosts is kept in a ring buffer so that
+%%%   every attempt to connect or reconnect is a round-robin request against
+%%%   a different host, skipping any that cannot successfully accept a new
+%%%   connection request. Coupled with stochastic decay of existing connections
+%%%   the currently active sessions will automatically adapt to the current
+%%%   availability of Cassandra cluster client nodes for transactions.
 %%%
 %%%   There currently may only be one elysium_queue per application
 %%%   because it is a registered name and there is only one worker
-%%%   configuration.
+%%%   configuration. In future it is hoped that the registered
+%%%   ets table name constraint will be removed so that multiple
+%%%   independent Cassandra clusters may be used in a single
+%%%   application, however, this may prove difficult to do without
+%%%   introducing a serial bottleneck or highly contended ets table.
 %%%
 %%% @since 0.1.0
 %%% @end
@@ -34,7 +41,6 @@
 
 %% External API
 -export([
-         configured_name/0,
          start_link/1,
          idle_connections/1,
          checkout/1,
@@ -50,62 +56,59 @@
          terminate/3, code_change/4]).
 
 -define(SERVER, ?MODULE).
--define(MAX_CHECKOUT_RETRY, 20).
 
--type ets_buffer_name() :: atom().
--record(ef_state, {buffer_name :: ets_buffer_name()}).
+-record(ef_state, {buffer_name :: ets_buffer:buffer_name()}).
 
 
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec configured_name() -> undefined | {ok, ets_buffer_name()}.
-%% @doc
-%%   Fetch the queue name configured as cassandra_worker_queue in the
-%%   elysium section of the application config.
-%% @end
-configured_name() ->
-    application:get_env(elysium, cassandra_worker_queue).
-
--spec start_link(ets_buffer_name()) -> {ok, pid()}.
-%% @doc
-%%   Create an ets_buffer dedicated FIFO queue using the passed in queue
-%%   name.
-%% @end
+-spec start_link(ets_buffer:buffer_name()) -> {ok, pid()}.
+%% @doc Create an ets_buffer dedicated FIFO queue using the passed in queue name.
 start_link(Queue_Name)
   when is_atom(Queue_Name) ->
     gen_fsm:start_link(?MODULE, {Queue_Name, fifo, dedicated}, []).
     
--spec idle_connections(ets_buffer_name()) -> non_neg_integer().
-%% @doc
-%%   Report the number of queued connections, since active connections
-%%   are removed from the available queue.
-%% @end
-idle_connections(Queue_Name) ->
+-spec idle_connections(module()) -> {ets_buffer:buffer_name(), non_neg_integer()}.
+%% @doc Idle connections are those in the queue, not checked out.
+idle_connections(Config_Module)
+  when is_atom(Config_Module) ->
+    Queue_Name = elysium_config:worker_queue_name(Config_Module),
     Buffer_Count = ets_buffer:num_entries_dedicated(Queue_Name),
     report_available_sessions(Queue_Name, Buffer_Count).
 
 %% activate  (Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, activate).
 %% deactivate(Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, deactivate).
     
--spec checkout(ets_buffer_name()) -> pid() | none_available.
+-spec checkout(module()) -> pid() | none_available.
 %% @doc
 %%   Allocate a seestar_session to the caller by popping an entry
 %%   from the front of the connection queue. This function either
 %%   returns a live pid(), or none_available to indicate that all
 %%   connections to Cassandra are currently checked out.
 %%
-%%   The queue name must be provided so that we can avoid serializing
-%%   all concurrent calls through the underlying gen_fsm.
+%%   If there are internal delays on the ets_buffer FIFO queue,
+%%   this function will retry. If the session handed back is no
+%%   longer live, it is tossed and a new session is fetched. In
+%%   both cases, up to Config_Module:checkout_max_retry attempts
+%%   are tried before returning none_available.
+%%
+%%   If the queue is actually empty, no retries are performed.
+%%   It is left to the application in this case to decide when
+%%   and how often to retry.
 %% @end
-checkout(Queue_Name)
-  when is_atom(Queue_Name) ->
-    fetch_pid_from_queue(Queue_Name, 1).
+checkout(Config_Module)
+  when is_atom(Config_Module) ->
+    Queue_Name  = elysium_config:worker_queue_name  (Config_Module),
+    Max_Retries = elysium_config:checkout_max_retry (Config_Module),
+    fetch_pid_from_queue(Queue_Name, Max_Retries, 1).
 
 %% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Queue_Name, ?MAX_CHECKOUT_RETRY) -> none_available;
-fetch_pid_from_queue( Queue_Name, Count) ->
+fetch_pid_from_queue(_Queue_Name, Max_Retries, Times_Tried)
+  when Times_Tried >= Max_Retries ->
+    none_available;
+fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
     case ets_buffer:read_dedicated(Queue_Name) of
 
         %% Give up if there are no connections available...
@@ -114,13 +117,13 @@ fetch_pid_from_queue( Queue_Name, Count) ->
         %% Race condition with checkin, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         {missing_ets_data, Queue_Name, _} ->
-            fetch_pid_from_queue(Queue_Name, Count+1);
+            fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
 
         %% Return only a live pid, otherwise get the next one.
         [Session_Id] when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
-                false -> fetch_pid_from_queue(Queue_Name, Count+1);
+                false -> fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
                 true  -> Session_Id
             end;
 
@@ -128,7 +131,7 @@ fetch_pid_from_queue( Queue_Name, Count) ->
         Error -> Error
     end.
 
--spec checkin(ets_buffer_name(), pid()) -> {boolean(), pos_integer()}.
+-spec checkin(module(), pid()) -> {boolean(), {ets_buffer:buffer_name(), pos_integer()}}.
 %% @doc
 %%   Checkin a seestar_session by putting it at the end of the
 %%   available connection queue. Returns whether the checkin was
@@ -136,19 +139,21 @@ fetch_pid_from_queue( Queue_Name, Count) ->
 %%   attempted), and how many connections are available after the
 %%   checkin.
 %%
-%%   Currently sessions stay active until they fail or are
-%%   deliberately ended. In future, this function will include a
-%%   small decay factor so that sessions will eventually get
-%%   recycled.
+%%   Sessions have a fixed probability of failure on checkin.
+%%   The decay probability is a number of chances of dying per
+%%   1 Million checkin attempts. If the session is killed, it
+%%   will be replaced by the supervisor automatically spawning
+%%   a new worker and placing it at the end of the queue.
 %% @end
-checkin(Queue_Name, Session_Id)
-  when is_atom(Queue_Name), is_pid(Session_Id) ->
+checkin(Config_Module, Session_Id)
+  when is_atom(Config_Module), is_pid(Session_Id) ->
+    Queue_Name = elysium_config:worker_queue_name(Config_Module),
     case is_process_alive(Session_Id) of
         false ->
             Available = ets_buffer:num_entries_dedicated(Queue_Name),
             {false, report_available_sessions(Queue_Name, Available)};
         true ->
-            case decay_causes_death(Session_Id) of
+            case decay_causes_death(Config_Module, Session_Id) of
                 true  -> exit(Session_Id, kill),
                          Available = ets_buffer:num_entries_dedicated(Queue_Name),
                          {false, report_available_sessions(Queue_Name, Available)};
@@ -157,12 +162,12 @@ checkin(Queue_Name, Session_Id)
             end
     end.
 
-report_available_sessions( Queue_Name, {missing_ets_buffer, Queue_Name}) -> 0;
-report_available_sessions(_Queue_Name, Num_Sessions) -> Num_Sessions.
+report_available_sessions(Queue_Name, {missing_ets_buffer, Queue_Name}) -> {Queue_Name, 0};
+report_available_sessions(Queue_Name,                     Num_Sessions) -> {Queue_Name, Num_Sessions}.
 
-decay_causes_death(_Session_Id) ->
-    case application:get_env(elysium, decay_probability, 0) of
-        0 -> false;   % No decay
+decay_causes_death(Config_Module, _Session_Id) ->
+    case elysium_config:decay_probability(Config_Module) of
+        Never_Decays when Never_Decays =< 0 -> false;
         Probability when is_integer(Probability), Probability > 0, Probability =< 1000000 ->
             _ = maybe_seed(),
             R = random:uniform(1000000),
@@ -176,7 +181,7 @@ maybe_seed() ->
         _         -> ok
     end.
 
-     
+
 %%%-----------------------------------------------------------------------
 %%% init, code_change and terminate
 %%%-----------------------------------------------------------------------
