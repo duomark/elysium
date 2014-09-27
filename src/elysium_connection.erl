@@ -14,7 +14,7 @@
 %%%
 %%%   Once a connection is successfully created, it is saved at
 %%%   the end of an ets_buffer FIFO queue. The queue provides a
-%%%   supply of Cassandra connection sessions, via the checkout/0
+%%%   supply of Cassandra connection sessions, via the checkout/1
 %%%   function. If none are available, the caller can decide how
 %%%   to handle the situation appropriately.
 %%%
@@ -22,7 +22,8 @@
 %%%   even using a try / after, but note that if you link to the
 %%%   checked out connection a process death of the caller can
 %%%   safely take down the connection because the supervisor will
-%%%   immediately spawn a replacement.
+%%%   immediately spawn a replacement. The simplest technique is
+%%%   to call with_connection/3,4
 %%%
 %%% @since 0.1.0
 %%% @end
@@ -32,7 +33,7 @@
 
 %% External API
 -export([
-         start_link/2, stop/1,
+         start_link/3, stop/1,
          with_connection/3,
          with_connection/4
         ]).
@@ -42,7 +43,7 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec start_link(string(), pos_integer()) -> {ok, pid()} | {error, tuple()}.
+-spec start_link(module(), string(), pos_integer()) -> {ok, pid()} | {error, tuple()}.
 %% @doc
 %%   Create a new seestar_session (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
@@ -54,12 +55,11 @@
 %%   queue, replacing the crashed one that was removed from the queue
 %%   when it was allocated for work.
 %% @end
-start_link(Ip, Port)
-  when is_list(Ip), is_integer(Port), Port > 0 ->
+start_link(Config_Module, Ip, Port)
+  when is_atom(Config_Module), is_list(Ip), is_integer(Port), Port > 0 ->
     case seestar_session:start_link(Ip, Port) of
         {ok, Pid} ->
-            {ok, Queue_Name} = elysium_queue:configured_name(),
-            _ = elysium_queue:checkin(Queue_Name, Pid),
+            _ = elysium_queue:checkin(Config_Module, Pid),
             {ok, Pid};
         {error, {connection_error, _}} ->
             {error, {cassandra_not_available, [{ip, Ip}, {port, Port}]}};
@@ -74,8 +74,7 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--type ets_buffer_name() :: atom().
--spec with_connection(ets_buffer_name(), fun((pid(), Args) -> Result), Args)
+-spec with_connection(module(), fun((pid(), Args) -> Result), Args)
                      -> {error, no_db_connections}
                             | Result when Args   :: [any()],
                                           Result :: any().
@@ -84,29 +83,29 @@ stop(Session_Id)
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
-with_connection(Queue_Name, Session_Fun, Args)
+with_connection(Config_Module, Session_Fun, Args)
   when is_function(Session_Fun, 2), is_list(Args) ->
-    case elysium_queue:checkout(Queue_Name) of
+    case elysium_queue:checkout(Config_Module) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
             try    Session_Fun(Sid, Args)
-            after  _ = elysium_queue:checkin(Queue_Name, Sid)
+            after  _ = elysium_queue:checkin(Config_Module, Sid)
             end
     end.
 
--spec with_connection(ets_buffer_name(), module(), Fun::atom(), Args::[any()])
+-spec with_connection(module(), module(), Fun::atom(), Args::[any()])
                      -> {error, no_db_connections} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
-with_connection(Queue_Name, Mod, Fun, Args)
+with_connection(Config_Module, Mod, Fun, Args)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
-    case elysium_queue:checkout(Queue_Name) of
+    case elysium_queue:checkout(Config_Module) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
             try    Mod:Fun(Sid, Args)
-            after  _ = elysium_queue:checkin(Queue_Name, Sid)
+            after  _ = elysium_queue:checkin(Config_Module, Sid)
             end
     end.

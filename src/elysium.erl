@@ -14,6 +14,7 @@
 %%%   included_application within a larger application. The
 %%%   elysium_sup supervisor should be started and supervised
 %%%   by another supervisor within the including application.
+%%%   There are no startup phases which need be coordinated.
 %%%
 %%% @since 0.1.0
 %%% @end
@@ -50,7 +51,7 @@ stop() ->
 %%   Start the example application using 'erl -s elysium'.
 %% @end
 start(_StartType, _StartArgs) -> 
-    elysium_sup:start_link().
+    elysium_sup:start_link(elysium_default_config).
 
 -spec stop(any()) -> no_return().
 %% @doc

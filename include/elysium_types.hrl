@@ -1,0 +1,1 @@
+-type host_list() :: [{Ip_Addr::string(), Port::pos_integer()}].
