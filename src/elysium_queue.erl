@@ -64,11 +64,11 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec start_link(ets_buffer:buffer_name()) -> {ok, pid()}.
+-spec start_link(module()) -> {ok, pid()}.
 %% @doc Create an ets_buffer dedicated FIFO queue using the passed in queue name.
-start_link(Queue_Name)
-  when is_atom(Queue_Name) ->
-    gen_fsm:start_link(?MODULE, {Queue_Name, fifo, dedicated}, []).
+start_link(Config_Module)
+  when is_atom(Config_Module) ->
+    gen_fsm:start_link(?MODULE, {Config_Module, fifo, dedicated}, []).
     
 -spec idle_connections(module()) -> {ets_buffer:buffer_name(), non_neg_integer()}.
 %% @doc Idle connections are those in the queue, not checked out.
@@ -190,7 +190,8 @@ maybe_seed() ->
 %% @doc
 %%   Create the connection queue and initialize the internal state.
 %% @end        
-init({Queue_Name, fifo, dedicated}) ->
+init({Config_Module, fifo, dedicated}) ->
+    Queue_Name = elysium_config:worker_queue_name(Config_Module),
     ets_buffer:create_dedicated(Queue_Name, fifo),
     State = #ef_state{buffer_name = Queue_Name},
     {ok, 'INACTIVE', State}.

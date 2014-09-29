@@ -58,8 +58,7 @@ start_link(Config_Module) ->
 init({Config_Module}) ->
     Cassandra_Nodes = elysium_config:round_robin_hosts (Config_Module),
     Num_Workers     = elysium_config:worker_max_count  (Config_Module),
-    Queue_Name      = elysium_config:worker_queue_name (Config_Module),
 
-    Fsm_Proc = ?CHILD(elysium_queue,          [Queue_Name]),
+    Fsm_Proc = ?CHILD(elysium_queue,          [Config_Module]),
     Conn_Sup = ?SUPER(elysium_connection_sup, [Config_Module, Cassandra_Nodes, Num_Workers]),
     {ok, {{rest_for_one, 10, 10}, [Fsm_Proc, Conn_Sup]}}.

@@ -60,8 +60,8 @@ init({Config_Module, Nodes, Num_Connections}) ->
     Children   = make_childspecs(Config_Module, Node_Queue, Names, []),
     {ok, {{one_for_one, 1000, 1}, Children}}.
 
-make_childspecs(Config_Module, _Node_Queue,            [], Specs) -> Specs;
-make_childspecs(Config_Module,  Node_Queue, [Name | More], Specs) ->
+make_childspecs(_Config_Module, _Node_Queue,            [], Specs) -> Specs;
+make_childspecs( Config_Module,  Node_Queue, [Name | More], Specs) ->
     {{value, {Ip, Port} = Node}, Q} = queue:out(Node_Queue),
     New_Spec = ?CHILD(Name, elysium_connection, [Config_Module, Ip, Port]),
     make_childspecs(Config_Module, queue:in(Node, Q), More, [New_Spec | Specs]).
