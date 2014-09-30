@@ -88,10 +88,9 @@
 %% Configuration parameters may be either compiled functions or keys in a dictionary.
 %% These functions are used for validating once before using.
 
--spec all_config_atoms() -> [atom()].
--spec all_config_bins()  -> [binary()].
--spec is_valid_config(config_type())  -> boolean().
 
+-spec all_config_atoms() -> [atom()].
+%% @doc Get a list of all the configuration parameter keys as atoms.
 all_config_atoms() ->
     ordsets:from_list([
                        cassandra_hosts,
@@ -101,22 +100,33 @@ all_config_atoms() ->
                        cassandra_session_decay_probability
                       ]).
 
+-spec all_config_bins()  -> [binary()].
+%% @doc Get a list of all the configuration parameter keys as binaries.
 all_config_bins() ->
     [atom_to_binary(Attr, utf8) || Attr <- all_config_atoms()].
 
+-spec is_valid_config(config_type())  -> boolean().
+%% @doc Verify that the configuration is a valid construct and has all the parameter attributes supported.
 is_valid_config({config_mod, Module}) -> is_valid_config_module(Module);
 is_valid_config({vbisect,   Bindict}) -> is_valid_config_vbisect(Bindict).
     
+-spec is_valid_config_module(module())  -> boolean().
+%% @doc Verify that a compiled module configuration has a function for every configuration parameter.
 is_valid_config_module(Module) when is_atom(Module) ->
     lists:all(fun(Param) -> erlang:function_exported(Module, Param, 0) end, all_config_atoms()).
 
+-spec is_valid_config_vbisect(vbisect:bindict())  -> boolean().
+%% @doc Verify that a binary dictionary contains all the keys corresponding to configuration parameters.
 is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
 -spec make_vbisect_config(queue_name(), host_list(), max_sessions(), max_retries(), decay_prob())
                          -> {vbisect, vbisect:bindict()}.
-
+%% @doc
+%%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
+%%   The resulting data structure may be passed as a configuration to any of the elysium functions.
+%% @end
 make_vbisect_config(Queue_Name, [{_Ip, _Port} | _] = Host_List, Max_Sessions, Max_Retries, Decay_Prob)
  when is_atom(Queue_Name), is_list(_Ip), is_integer(_Port), _Port > 0,
       is_integer(Max_Sessions), Max_Sessions >  0,
@@ -134,34 +144,39 @@ make_vbisect_config(Queue_Name, [{_Ip, _Port} | _] = Host_List, Max_Sessions, Ma
 
 
 %% Configuration accessors are expected to be used frequently.
-%% They should have no concurrency contention and are expected
-%% to execute as quickly as possible, therefore the raw accessors
-%% do not check for the validity of the parameters. These functions
+%% They should have no concurrency contention and must execute
+%% as quickly as possible, therefore the raw accessors do not
+%% check for the validity of the parameters. These functions
 %% will crash if they are passed an invalid parameter.
 
--spec session_queue_name (config_type()) -> queue_name().
--spec round_robin_hosts  (config_type()) -> host_list().
--spec session_max_count  (config_type()) -> max_sessions().
--spec checkout_max_retry (config_type()) -> max_retries().
--spec decay_probability  (config_type()) -> decay_prob().
 
+-spec session_queue_name (config_type()) -> queue_name().
+%% @doc Get the configured name of the live session queue.
 session_queue_name ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_queue();
 session_queue_name ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
-                                                 binary_to_atom(Bin_Value, utf8).
+                                                     binary_to_atom(Bin_Value, utf8).
 
+-spec round_robin_hosts  (config_type()) -> host_list().
+%% @doc Get the configured set of cassandra nodes to contact.
 round_robin_hosts  ({config_mod,  Config_Module}) -> Config_Module:cassandra_hosts();
 round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_hosts">>, Bindict),
-                                                 binary_to_term(Bin_Value).
+                                                     binary_to_term(Bin_Value).
 
+-spec session_max_count  (config_type()) -> max_sessions().
+%% @doc Get the maximum number of live sessions that can be open simultaneously.
 session_max_count  ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_sessions();
 session_max_count  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_sessions">>, Bindict),
-                                                 binary_to_integer(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
+-spec checkout_max_retry (config_type()) -> max_retries().
+%% @doc Get the number of retries on transient failure when retrieving a live session from the queue.
 checkout_max_retry ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_checkout_retry();
 checkout_max_retry ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_checkout_retry">>, Bindict),
-                                                 binary_to_integer(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
+-spec decay_probability  (config_type()) -> decay_prob().
+%% @doc Get the number of chances in 1 Million that this session will be stochastically recycled before checkin.
 decay_probability  ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_decay_probability();
 decay_probability  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
-                                                 binary_to_integer(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
