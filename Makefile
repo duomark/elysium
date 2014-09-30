@@ -1,8 +1,9 @@
 PROJECT = elysium
 
-DEPS = eper epocxy seestar
+DEPS = eper epocxy seestar vbisect
 dep_epocxy  = git https://github.com/duomark/epocxy 0.9.8
-dep_seestar = git https://github.com/jaynel/seestar master
+dep_seestar = git https://github.com/iamaleksey/seestar master
+dep_vbisect = git https://github.com/jaynel/vbisect 0.1.2
 V = 0
 
 TEST_DEPS = proper test_commons
@@ -22,13 +23,13 @@ CT_OPTS := -cover test/elysium.coverspec
 ## EDOC_DIRS := ["src", "examples"]
 ## EDOC_OPTS := {preprocess, true}, {source_path, ${EDOC_DIRS}}, nopackages, {subpackages, true}
 
-ERL_PATH := -pa ../elysium/ebin deps/*/ebin 
-SERVER := erl -smp enable $(ERL_PATH)
+ERL_PATH := -smp enable -pa ../elysium/ebin deps/*/ebin 
+SERVER := erl $(ERL_PATH)
 
 include erlang.mk
 
 run: all
-	$(SERVER) -s elysium
+	$(SERVER) -mode embedded -s elysium
 
 dev: all
 	$(SERVER) -pa test

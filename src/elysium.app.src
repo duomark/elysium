@@ -3,9 +3,9 @@
   {description, "Elysium for Cassandra"},
   {vsn, "0.1.2"},
   {id, "elysium"},
-  {registered, [elysium_sup, elysium_queue]},
+  {registered, [elysium_sup, elysium_connection_sup]},
   {applications, [kernel, stdlib]},
-  {included_applications, [epocxy, eper, seestar]},
+  {included_applications, [epocxy, eper, seestar, vbisect]},
   {mod, {elysium, []}},
   {modules, []},
   {env, []}

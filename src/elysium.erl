@@ -51,7 +51,7 @@ stop() ->
 %%   Start the example application using 'erl -s elysium'.
 %% @end
 start(_StartType, _StartArgs) -> 
-    elysium_sup:start_link(elysium_default_config).
+    elysium_sup:start_link({config_mod, elysium_default_config}).
 
 -spec stop(any()) -> no_return().
 %% @doc

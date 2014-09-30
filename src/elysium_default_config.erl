@@ -27,23 +27,23 @@
 -behaviour(elysium_config).
 -include("elysium_types.hrl").
 
--spec cassandra_session_queue() -> ets_buffer:buffer_name().
-%% @doc The name of the ets_buffer for the active session queue.
+-spec cassandra_session_queue() -> queue_name().
+%% @doc Using session queue 'elysium_connection_queue'.
 cassandra_session_queue() -> elysium_connection_queue.
 
 -spec cassandra_hosts() -> host_list().
-%% @doc The list of Cassandra hosts and ports to connect sessions.
+%% @doc Only local host: [{"127.0.0.1", 9042}].
 cassandra_hosts() -> [{"127.0.0.1", 9042}].
 
--spec cassandra_max_sessions() -> pos_integer().
-%% @doc The maximum number of live Cassandra sessions simultaneously active.
+-spec cassandra_max_sessions() -> max_sessions().
+%% @doc Allow a max of 16 simultaneous live Cassandra sessions.
 cassandra_max_sessions() -> 16.
 
--spec cassandra_max_checkout_retry() -> pos_integer().
-%% @doc The maximum number of times to retry on checkout if transient errors.
+-spec cassandra_max_checkout_retry() -> max_retries().
+%% @doc Retry up to 20 times when session queue races occur.
 cassandra_max_checkout_retry() -> 20.
 
--spec cassandra_session_decay_probability() -> pos_integer().
-%% @doc Number of chances that a live session should be killed, per 1M uses.
+-spec cassandra_session_decay_probability() -> decay_prob().
+%% @doc Kill a live session 1000 out of 1M times it is used.
 cassandra_session_decay_probability() -> 1000.
     
