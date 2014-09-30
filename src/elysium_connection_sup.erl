@@ -18,7 +18,7 @@
 -behavior(supervisor).
 
 %% External API
--export([start_link/3, init/1]).
+-export([start_link/1, init/1]).
 
 -include("elysium_types.hrl").
 
@@ -26,42 +26,47 @@
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
--spec start_link(module(), host_list(), pos_integer()) -> {ok, pid()}.
-%% @doc
-%%   Start the connection supervisor for a specific Cassandra Ip + Port.
-%%   The number of connections translates to the number of children
-%%   started and maintained by the supervisor at all times.
-%% @end
-start_link(Config_Module, Nodes, Num_Connections)
-  when is_atom(Config_Module), is_list(Nodes),
-       is_integer(Num_Connections), Num_Connections > 0 ->
 
-    supervisor:start_link({local, ?MODULE}, ?MODULE,
-                          {Config_Module, Nodes, Num_Connections}).
+-spec start_link(config_type()) -> {ok, pid()}.
+%% @doc
+%%   Start the connection supervisor which manages replacement of
+%%   connections when they die. This supervisor has one child for
+%%   each Cassandra session allowed simultaneously.
+%% @end
+start_link(Config) ->
+    true = elysium_config:is_valid_config(Config),
+    supervisor:start_link({local, ?MODULE}, ?MODULE, {Config}).
 
 
 %%%-----------------------------------------------------------------------
 %%% Internal API
 %%%-----------------------------------------------------------------------
+
 -define(CHILD(__Name, __Mod, __Args),
         {__Name, {__Mod, start_link, __Args}, permanent, 2000, worker, [__Mod]}).
 
--spec init({module(), host_list(), pos_integer()})
+-spec init({config_type()})
           -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                    [supervisor:child_spec()]}}.
 %% @doc
 %%   Creates a separate one_for_one elysium_connection child for each
 %%   of the number of simultaneous connections to Cassandra desired.
 %% @end
-init({Config_Module, Nodes, Num_Connections}) ->
+init({Config}) ->
+    %% Create session names only for the supervisor list, not registered names.
+    Num_Sessions = elysium_config:session_max_count(Config),
     Names = [list_to_atom("elysium_connection_" ++ integer_to_list(N))
-             || N <- lists:seq(1, Num_Connections)],
-    Node_Queue = queue:from_list([Node || {_Ip, _Port} = Node <- Nodes]),
-    Children   = make_childspecs(Config_Module, Node_Queue, Names, []),
+             || N <- lists:seq(1, Num_Sessions)],
+
+    %% Filter out any malformed Host IP / Port pairs...
+    Cassandra_Nodes = elysium_config:round_robin_hosts(Config),
+    Node_Queue = queue:from_list([Node || {_Ip, _Port} = Node <- Cassandra_Nodes,
+                                          is_list(_Ip), is_integer(_Port), _Port > 0]),
+    Children   = make_childspecs(Config, Node_Queue, Names, []),
     {ok, {{one_for_one, 1000, 1}, Children}}.
 
-make_childspecs(_Config_Module, _Node_Queue,            [], Specs) -> Specs;
-make_childspecs( Config_Module,  Node_Queue, [Name | More], Specs) ->
+make_childspecs(_Config, _Node_Queue,            [], Specs) -> Specs;
+make_childspecs( Config,  Node_Queue, [Name | More], Specs) ->
     {{value, {Ip, Port} = Node}, Q} = queue:out(Node_Queue),
-    New_Spec = ?CHILD(Name, elysium_connection, [Config_Module, Ip, Port]),
-    make_childspecs(Config_Module, queue:in(Node, Q), More, [New_Spec | Specs]).
+    New_Spec = ?CHILD(Name, elysium_connection, [Config, Ip, Port]),
+    make_childspecs(Config, queue:in(Node, Q), More, [New_Spec | Specs]).

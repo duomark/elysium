@@ -57,31 +57,33 @@
 
 -define(SERVER, ?MODULE).
 
--record(ef_state, {buffer_name :: ets_buffer:buffer_name()}).
+-include("elysium_types.hrl").
+
+-record(ef_state, {buffer_name :: queue_name()}).
 
 
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec start_link(module()) -> {ok, pid()}.
-%% @doc Create an ets_buffer dedicated FIFO queue using the passed in queue name.
-start_link(Config_Module)
-  when is_atom(Config_Module) ->
-    gen_fsm:start_link(?MODULE, {Config_Module, fifo, dedicated}, []).
+-spec start_link(config_type()) -> {ok, pid()}.
+%% @doc Create an ets_buffer dedicated FIFO queue using the configured queue name.
+start_link(Config) ->
+    true = elysium_config:is_valid_config(Config),
+    gen_fsm:start_link(?MODULE, {Config, fifo, dedicated}, []).
     
--spec idle_connections(module()) -> {ets_buffer:buffer_name(), non_neg_integer()}.
+-spec idle_connections(config_type()) -> {queue_name(), max_sessions()}.
 %% @doc Idle connections are those in the queue, not checked out.
-idle_connections(Config_Module)
-  when is_atom(Config_Module) ->
-    Queue_Name = elysium_config:worker_queue_name(Config_Module),
+idle_connections(Config) ->
+    Queue_Name = elysium_config:session_queue_name(Config),
     Buffer_Count = ets_buffer:num_entries_dedicated(Queue_Name),
     report_available_sessions(Queue_Name, Buffer_Count).
+
 
 %% activate  (Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, activate).
 %% deactivate(Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, deactivate).
     
--spec checkout(module()) -> pid() | none_available.
+-spec checkout(config_type()) -> pid() | none_available.
 %% @doc
 %%   Allocate a seestar_session to the caller by popping an entry
 %%   from the front of the connection queue. This function either
@@ -97,17 +99,18 @@ idle_connections(Config_Module)
 %%   If the queue is actually empty, no retries are performed.
 %%   It is left to the application in this case to decide when
 %%   and how often to retry.
+%%
+%%   The configuration parameter is not validated because this
+%%   function should be a hotspot and we don't want it to slow
+%%   down or become a concurrency bottleneck.
 %% @end
-checkout(Config_Module)
-  when is_atom(Config_Module) ->
-    Queue_Name  = elysium_config:worker_queue_name  (Config_Module),
-    Max_Retries = elysium_config:checkout_max_retry (Config_Module),
-    fetch_pid_from_queue(Queue_Name, Max_Retries, 1).
+checkout(Config) ->
+    Queue_Name  = elysium_config:session_queue_name (Config),
+    Max_Retries = elysium_config:checkout_max_retry (Config),
+    fetch_pid_from_queue(Queue_Name, Max_Retries, -1).
 
 %% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Queue_Name, Max_Retries, Times_Tried)
-  when Times_Tried >= Max_Retries ->
-    none_available;
+fetch_pid_from_queue(_Queue_Name, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
 fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
     case ets_buffer:read_dedicated(Queue_Name) of
 
@@ -131,7 +134,7 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
         Error -> Error
     end.
 
--spec checkin(module(), pid()) -> {boolean(), {ets_buffer:buffer_name(), pos_integer()}}.
+-spec checkin(config_type(), pid()) -> {boolean(), {queue_name(), max_sessions()}}.
 %% @doc
 %%   Checkin a seestar_session by putting it at the end of the
 %%   available connection queue. Returns whether the checkin was
@@ -144,16 +147,20 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
 %%   1 Million checkin attempts. If the session is killed, it
 %%   will be replaced by the supervisor automatically spawning
 %%   a new worker and placing it at the end of the queue.
+%%
+%%   The configuration parameter is not validated because this
+%%   function should be a hotspot and we don't want it to slow
+%%   down or become a concurrency bottleneck.
 %% @end
-checkin(Config_Module, Session_Id)
-  when is_atom(Config_Module), is_pid(Session_Id) ->
-    Queue_Name = elysium_config:worker_queue_name(Config_Module),
+checkin(Config, Session_Id)
+  when is_pid(Session_Id) ->
+    Queue_Name = elysium_config:session_queue_name(Config),
     case is_process_alive(Session_Id) of
         false ->
             Available = ets_buffer:num_entries_dedicated(Queue_Name),
             {false, report_available_sessions(Queue_Name, Available)};
         true ->
-            case decay_causes_death(Config_Module, Session_Id) of
+            case decay_causes_death(Config, Session_Id) of
                 true  -> exit(Session_Id, kill),
                          Available = ets_buffer:num_entries_dedicated(Queue_Name),
                          {false, report_available_sessions(Queue_Name, Available)};
@@ -165,13 +172,13 @@ checkin(Config_Module, Session_Id)
 report_available_sessions(Queue_Name, {missing_ets_buffer, Queue_Name}) -> {Queue_Name, 0};
 report_available_sessions(Queue_Name,                     Num_Sessions) -> {Queue_Name, Num_Sessions}.
 
-decay_causes_death(Config_Module, _Session_Id) ->
-    case elysium_config:decay_probability(Config_Module) of
-        Never_Decays when Never_Decays =< 0 -> false;
-        Probability when is_integer(Probability), Probability > 0, Probability =< 1000000 ->
+decay_causes_death(Config, _Session_Id) ->
+    case elysium_config:decay_probability(Config) of
+        Never_Decays when is_integer(Never_Decays), Never_Decays =:= 0 -> false;
+        Probability  when is_integer(Probability),  Probability   >  0, Probability =< 1000000 ->
             _ = maybe_seed(),
             R = random:uniform(1000000),
-            R < Probability
+            R =< Probability
     end.
 
 maybe_seed() ->
@@ -190,8 +197,8 @@ maybe_seed() ->
 %% @doc
 %%   Create the connection queue and initialize the internal state.
 %% @end        
-init({Config_Module, fifo, dedicated}) ->
-    Queue_Name = elysium_config:worker_queue_name(Config_Module),
+init({Config, fifo, dedicated}) ->
+    Queue_Name = elysium_config:session_queue_name(Config),
     ets_buffer:create_dedicated(Queue_Name, fifo),
     State = #ef_state{buffer_name = Queue_Name},
     {ok, 'INACTIVE', State}.

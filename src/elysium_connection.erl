@@ -38,6 +38,8 @@
          with_connection/4
         ]).
 
+-include("elysium_types.hrl").
+
 
 %%%-----------------------------------------------------------------------
 %%% External API
@@ -55,11 +57,11 @@
 %%   queue, replacing the crashed one that was removed from the queue
 %%   when it was allocated for work.
 %% @end
-start_link(Config_Module, Ip, Port)
-  when is_atom(Config_Module), is_list(Ip), is_integer(Port), Port > 0 ->
+start_link(Config, Ip, Port)
+  when is_list(Ip), is_integer(Port), Port > 0 ->
     case seestar_session:start_link(Ip, Port) of
         {ok, Pid} ->
-            _ = elysium_queue:checkin(Config_Module, Pid),
+            _ = elysium_queue:checkin(Config, Pid),
             {ok, Pid};
         {error, {connection_error, _}} ->
             {error, {cassandra_not_available, [{ip, Ip}, {port, Port}]}};
@@ -74,7 +76,7 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--spec with_connection(module(), fun((pid(), Args) -> Result), Args)
+-spec with_connection(config_type(), fun((pid(), Args) -> Result), Args)
                      -> {error, no_db_connections}
                             | Result when Args   :: [any()],
                                           Result :: any().
@@ -83,29 +85,30 @@ stop(Session_Id)
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
-with_connection(Config_Module, Session_Fun, Args)
+with_connection(Config, Session_Fun, Args)
   when is_function(Session_Fun, 2), is_list(Args) ->
-    case elysium_queue:checkout(Config_Module) of
+    case elysium_queue:checkout(Config) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
             try    Session_Fun(Sid, Args)
-            after  _ = elysium_queue:checkin(Config_Module, Sid)
+            after  _ = elysium_queue:checkin(Config, Sid)
             end
     end.
 
--spec with_connection(module(), module(), Fun::atom(), Args::[any()])
+-spec with_connection(config_type(), module(), Fun::atom(), Args::[any()])
                      -> {error, no_db_connections} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
-with_connection(Config_Module, Mod, Fun, Args)
+with_connection(Config, Mod, Fun, Args)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
-    case elysium_queue:checkout(Config_Module) of
+    true = erlang:function_exported(Mod, Fun, 2),
+    case elysium_queue:checkout(Config) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
             try    Mod:Fun(Sid, Args)
-            after  _ = elysium_queue:checkin(Config_Module, Sid)
+            after  _ = elysium_queue:checkin(Config, Sid)
             end
     end.
