@@ -17,6 +17,7 @@
 -author('jay@duomark.com').
 
 -export([
+         cassandra_lb_queue/0,
          cassandra_session_queue/0,
          cassandra_hosts/0,
          cassandra_max_sessions/0,
@@ -27,21 +28,25 @@
 -behaviour(elysium_config).
 -include("elysium_types.hrl").
 
--spec cassandra_session_queue() -> queue_name().
+-spec cassandra_lb_queue() -> lb_queue_name().
+%% @doc Using load balancer queue 'elysium_lb_queue'.
+cassandra_lb_queue() -> elysium_lb_queue.
+
+-spec cassandra_session_queue() -> session_queue_name().
 %% @doc Using session queue 'elysium_connection_queue'.
 cassandra_session_queue() -> elysium_connection_queue.
 
 -spec cassandra_hosts() -> host_list().
 %% @doc Only local host: [{"127.0.0.1", 9042}].
-cassandra_hosts() -> [{"127.0.0.1", 9042}].
+cassandra_hosts() -> [{"127.0.0.1", 9042}, {"192.168.1.71", 9042}, {"192.168.1.81", 9042}, {"192.168.1.91", 9042}].
 
 -spec cassandra_max_sessions() -> max_sessions().
 %% @doc Allow a max of 16 simultaneous live Cassandra sessions.
-cassandra_max_sessions() -> 16.
+cassandra_max_sessions() -> 5.
 
 -spec cassandra_max_checkout_retry() -> max_retries().
 %% @doc Retry up to 20 times when session queue races occur.
-cassandra_max_checkout_retry() -> 20.
+cassandra_max_checkout_retry() -> 3.
 
 -spec cassandra_session_decay_probability() -> decay_prob().
 %% @doc Kill a live session 1000 out of 1M times it is used.

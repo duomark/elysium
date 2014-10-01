@@ -33,7 +33,8 @@
 
 %% External API
 -export([
-         start_link/3, stop/1,
+         start_link/1,
+         stop/1,
          with_connection/3,
          with_connection/4
         ]).
@@ -45,7 +46,10 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--spec start_link(module(), string(), pos_integer()) -> {ok, pid()} | {error, tuple()}.
+-type node_attempt() :: {Ip::string(), Port::pos_integer()}.
+-spec start_link(config_type()) -> {ok, pid()}
+                                       | {error, {cassandra_not_available,
+                                                  [node_attempt()]}}.
 %% @doc
 %%   Create a new seestar_session (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
@@ -57,15 +61,59 @@
 %%   queue, replacing the crashed one that was removed from the queue
 %%   when it was allocated for work.
 %% @end
-start_link(Config, Ip, Port)
-  when is_list(Ip), is_integer(Port), Port > 0 ->
-    case seestar_session:start_link(Ip, Port) of
-        {ok, Pid} ->
-            _ = elysium_queue:checkin(Config, Pid),
-            {ok, Pid};
-        {error, {connection_error, _}} ->
-            {error, {cassandra_not_available, [{ip, Ip}, {port, Port}]}};
-        Other -> Other
+start_link(Config) ->
+    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
+    Max_Retries   = elysium_config:checkout_max_retry  (Config),
+    case start_session(Lb_Queue_Name, Max_Retries, -1, []) of
+        {ok, Pid} -> {ok, Pid};
+        Error -> error_logger:error_msg("Start_link error ~p~n", [Error])
+    end.
+
+start_session(_Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
+  when Times_Tried >= Max_Retries ->
+    {error, {cassandra_not_available, Attempted_Connections}};
+
+start_session( Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+    case ets_buffer:read_dedicated(Lb_Queue_Name) of
+
+        %% Give up if there are no connections available...
+        [] -> {error, {cassandra_not_available, Attempted_Connections}};
+
+        %% Race condition with another user, try again...
+        %% (Internally, ets_buffer calls erlang:yield() when this happens)
+        {missing_ets_data, Lb_Queue_Name, _} ->
+            start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
+
+        %% Attempt to connect to Cassandra node...
+        [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
+            error_logger:error_msg("Attempting to connect to ~p~n", [Node]),
+            try seestar_session:start_link(Ip, Port, [], [{connect_timeout, 500}]) of
+                {ok, Pid} = Session when is_pid(Pid) ->
+                    error_logger:error_msg("Connected~n", []),
+                    Session;
+
+                %% If we fail, try again after recording attempt.
+                {error, {connection_error, Failure}} ->
+                    error_logger:error_msg("Failed: ~p~n", [Failure]),
+                    New_Attempts = [Node | Attempted_Connections],
+                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts);
+
+                Other ->
+                    error_logger:error_msg("Other: ~p~n", [Other]),
+                    New_Attempts = [Node | Attempted_Connections],
+                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts)
+
+            catch A:B ->
+                    error_logger:error_msg("Caught ~p~n", [{A, B}]),
+                    New_Attempts = [Node | Attempted_Connections],
+                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts)
+
+            %% Ensure that we get the Node checked back in.
+            after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
+            end;
+
+        %% Somehow the load balancer queue died, or something even worse!
+        Error -> Error
     end.
 
 -spec stop(pid()) -> ok.

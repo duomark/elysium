@@ -67,8 +67,9 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/5,
+         make_vbisect_config/6,
 
+         load_balancer_queue/1,
          session_queue_name/1,
          round_robin_hosts/1,
          session_max_count/1,
@@ -78,7 +79,8 @@
 
 -include("elysium_types.hrl").
 
--callback cassandra_session_queue()             -> queue_name().
+-callback cassandra_lb_queue()                  -> lb_queue_name().
+-callback cassandra_session_queue()             -> session_queue_name().
 -callback cassandra_hosts()                     -> host_list().
 -callback cassandra_max_sessions()              -> max_sessions().
 -callback cassandra_max_checkout_retry()        -> max_retries().
@@ -94,6 +96,7 @@
 all_config_atoms() ->
     ordsets:from_list([
                        cassandra_hosts,
+                       cassandra_lb_queue,
                        cassandra_session_queue,
                        cassandra_max_sessions,
                        cassandra_max_checkout_retry,
@@ -121,24 +124,27 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
--spec make_vbisect_config(queue_name(), host_list(), max_sessions(), max_retries(), decay_prob())
-                         -> {vbisect, vbisect:bindict()}.
+-spec make_vbisect_config(lb_queue_name(), session_queue_name(), host_list(),
+                          max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
-make_vbisect_config(Queue_Name, [{_Ip, _Port} | _] = Host_List, Max_Sessions, Max_Retries, Decay_Prob)
- when is_atom(Queue_Name), is_list(_Ip), is_integer(_Port), _Port > 0,
+make_vbisect_config(Lb_Queue_Name, Queue_Name, [{_Ip, _Port} | _] = Host_List,
+                    Max_Sessions, Max_Retries, Decay_Prob)
+ when is_atom(Lb_Queue_Name),   is_atom(Queue_Name),
+      is_list(_Ip), is_integer(_Port), _Port > 0,
       is_integer(Max_Sessions), Max_Sessions >  0,
       is_integer(Max_Retries),  Max_Retries  >= 0,
       is_integer(Decay_Prob),   Decay_Prob   >= 0, Decay_Prob =< 1000000 ->
 
     Props = [
-             {<<"cassandra_session_queue">>,              atom_to_binary(Queue_Name, utf8)},
-             {<<"cassandra_hosts">>,                      term_to_binary(Host_List)},
-             {<<"cassandra_max_sessions">>,               integer_to_binary(Max_Sessions)},
-             {<<"cassandra_max_checkout_retry">>,         integer_to_binary(Max_Retries)},
-             {<<"cassandra_session_decay_probability">>,  integer_to_binary(Decay_Prob)}
+             {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name, utf8)},
+             {<<"cassandra_session_queue">>,              atom_to_binary    (Queue_Name,    utf8)},
+             {<<"cassandra_hosts">>,                      term_to_binary    (Host_List)},
+             {<<"cassandra_max_sessions">>,               integer_to_binary (Max_Sessions)},
+             {<<"cassandra_max_checkout_retry">>,         integer_to_binary (Max_Retries)},
+             {<<"cassandra_session_decay_probability">>,  integer_to_binary (Decay_Prob)}
             ],
     {vbisect, vbisect:from_list(Props)}.
 
@@ -150,7 +156,13 @@ make_vbisect_config(Queue_Name, [{_Ip, _Port} | _] = Host_List, Max_Sessions, Ma
 %% will crash if they are passed an invalid parameter.
 
 
--spec session_queue_name (config_type()) -> queue_name().
+-spec load_balancer_queue (config_type()) -> lb_queue_name().
+%% @doc Get the configured name of the round-robin load balancer queue.
+load_balancer_queue ({config_mod,  Config_Module}) -> Config_Module:cassandra_lb_queue();
+load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
+                                                     binary_to_atom(Bin_Value, utf8).
+
+-spec session_queue_name (config_type()) -> session_queue_name().
 %% @doc Get the configured name of the live session queue.
 session_queue_name ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_queue();
 session_queue_name ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
