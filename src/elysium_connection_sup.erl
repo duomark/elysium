@@ -53,7 +53,8 @@
 %% @end
 start_link() ->
     {ok, Sup_Pid} = supervisor:start_link(?MODULE, {}),
-    elysium_queue:register_connection_supervisor(Sup_Pid),
+    ok = elysium_queue:register_connection_supervisor(Sup_Pid),
+    _Num_Sessions = elysium_queue:activate(),
     {ok, Sup_Pid}.
 
 -spec start_child(pid(), [config_type()]) -> {ok, pid()}.

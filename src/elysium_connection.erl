@@ -87,34 +87,30 @@ start_session( Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) -
         %% Attempt to connect to Cassandra node...
         [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
             error_logger:error_msg("Attempting to connect to ~p~n", [Node]),
-            try seestar_session:start_link(Ip, Port, [], [{connect_timeout, 500}]) of
-                {ok, Pid} = Session when is_pid(Pid) ->
-                    error_logger:error_msg("Connected~n", []),
-                    Session;
-
-                %% If we fail, try again after recording attempt.
-                {error, {connection_error, Failure}} ->
-                    error_logger:error_msg("Failed: ~p~n", [Failure]),
-                    New_Attempts = [Node | Attempted_Connections],
-                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts);
-
-                Other ->
-                    error_logger:error_msg("Other: ~p~n", [Other]),
-                    New_Attempts = [Node | Attempted_Connections],
-                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts)
-
-            catch A:B ->
-                    error_logger:error_msg("Caught ~p~n", [{A, B}]),
-                    New_Attempts = [Node | Attempted_Connections],
-                    start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, New_Attempts)
-
-            %% Ensure that we get the Node checked back in.
-            after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
-            end;
+            try_connect(Node, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections);
 
         %% Somehow the load balancer queue died, or something even worse!
         Error -> Error
     end.
+
+try_connect({Ip, Port} = Node, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+    try seestar_session:start_link(Ip, Port, [], [{connect_timeout, 500}]) of
+        {ok, Pid} = Session when is_pid(Pid) ->
+            error_logger:error_msg("Connected~n", []),
+            Session;
+
+        %% If we fail, try again after recording attempt.
+        Error ->
+            error_logger:error_msg("Error: ~p~n", [Error]),
+            start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node | Attempted_Connections])
+
+        catch A:B ->
+                error_logger:error_msg("Caught ~p~n", [{A, B}]),
+                start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node | Attempted_Connections])
+
+        %% Ensure that we get the Node checked back in.
+        after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
+        end.
 
 -spec stop(pid()) -> ok.
 %% @doc

@@ -38,7 +38,7 @@ cassandra_session_queue() -> elysium_connection_queue.
 
 -spec cassandra_hosts() -> host_list().
 %% @doc Only local host: [{"127.0.0.1", 9042}].
-cassandra_hosts() -> [{"127.0.0.1", 9042}, {"192.168.1.71", 9042}, {"192.168.1.81", 9042}, {"192.168.1.91", 9042}].
+cassandra_hosts() -> [{"127.0.0.1", 9042}].
 
 -spec cassandra_max_sessions() -> max_sessions().
 %% @doc Allow a max of 16 simultaneous live Cassandra sessions.

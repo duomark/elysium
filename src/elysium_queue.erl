@@ -43,8 +43,8 @@
 -export([
          start_link/1,
          register_connection_supervisor/1,
-         activate/1,
-         deactivate/1,
+         activate/0,
+         deactivate/0,
 
          idle_connections/1,
          checkout/1,
@@ -88,15 +88,15 @@ register_connection_supervisor(Connection_Sup)
   when is_pid(Connection_Sup) ->
     gen_fsm:send_all_state_event(?MODULE, {register_connection_supervisor, Connection_Sup}).
 
--spec activate(atom() | pid()) -> ok.
+-spec activate() -> max_sessions().
 %% @doc Change to the active state, creating new Cassandra sessions.
-activate(Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, activate).
+activate() ->
+    gen_fsm:sync_send_event(?MODULE, activate).
 
--spec deactivate(atom() | pid()) -> ok.
+-spec deactivate() -> ok.
 %% @doc Change to the inactive state, deleting Cassandra sessions.
-deactivate(Fsm_Ref) -> gen_fsm:send_event(Fsm_Ref, deactivate).
-
-
+deactivate() ->
+    gen_fsm:send_event(?MODULE, deactivate).
     
 -spec idle_connections(config_type()) -> {session_queue_name(), Idle_Count, Max_Count}
                                              when Idle_Count :: max_sessions(),
@@ -283,23 +283,30 @@ terminate(Reason, _State_Name,
 %%%-----------------------------------------------------------------------
 
 -spec 'ACTIVE'(any(), {pid(), reference()}, State)
-              -> {next_state, 'ACTIVE', State} when State :: #ef_state{}.
-%% Synchronous calls are not supported.
+              -> {reply, ok, 'ACTIVE', State} when State :: #ef_state{}.
 %% @private
 %% @doc Stay in the 'ACTIVE' state.
-'ACTIVE'  (_Any, _From, State) -> {next_state, 'ACTIVE',   State}.
+'ACTIVE'  (_Any, _From, State) ->
+    {reply, ok, 'ACTIVE', State}.
 
 -spec 'INACTIVE'(any(), {pid(), reference()}, State)
-              -> {next_state, 'INACTIVE', State} when State :: #ef_state{}.
+              -> {reply, max_sessions() | ok, 'INACTIVE', State} when State :: #ef_state{}.
 %% @private
 %% @doc Stay in the 'INACTIVE' state.
-'INACTIVE'(_Any, _From, State) -> {next_state, 'INACTIVE', State}.
+'INACTIVE'(activate, _From, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
+    Max_Sessions = elysium_config:session_max_count(Config),
+    _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
+         || _N <- lists:seq(1, Max_Sessions)],
+    {reply, Max_Sessions, 'ACTIVE', State};
+'INACTIVE'(_Any, _From, State) ->
+    {reply, ok, 'INACTIVE', State}.
 
 -spec 'WAIT_REGISTER'(any(), {pid(), reference()}, State)
-              -> {next_state, 'WAIT_REGISTER', State} when State :: #ef_state{}.
+              -> {reply, ok, 'WAIT_REGISTER', State} when State :: #ef_state{}.
 %% @private
 %% @doc Stay in the 'WAIT_REGISTER' state.
-'WAIT_REGISTER'(_Any, _From, State) -> {next_state, 'WAIT_REGISTER', State}.
+'WAIT_REGISTER'(_Any, _From, State) ->
+    {reply, ok, 'WAIT_REGISTER', State}.
 
 
 -spec 'ACTIVE'(activate, State) -> {next_state, 'ACTIVE', State} when State :: #ef_state{}.
@@ -316,7 +323,8 @@ terminate(Reason, _State_Name,
     _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
          || _N <- lists:seq(1, Max_Sessions)],
     {next_state, 'ACTIVE', State};
-'INACTIVE'(_Other,   State) -> {next_state, 'INACTIVE', State}.
+'INACTIVE'(_Other,   State) ->
+    {next_state, 'INACTIVE', State}.
 
 -spec 'WAIT_REGISTER'(any(), State) -> {next_state, 'INACTIVE' | 'WAIT_REGISTER', State}
                                            when State :: #ef_state{}.
