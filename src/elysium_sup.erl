@@ -62,5 +62,5 @@ start_link(Config) ->
 init({Config}) ->
     true     = elysium_config:is_valid_config (Config),
     Fsm_Proc = ?CHILD(elysium_queue,          [Config]),
-    Conn_Sup = ?SUPER(elysium_connection_sup, [Config]),
+    Conn_Sup = ?SUPER(elysium_connection_sup, []),
     {ok, {{rest_for_one, 10, 10}, [Fsm_Proc, Conn_Sup]}}.
