@@ -64,16 +64,13 @@
 start_link(Config) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
-    case start_session(Lb_Queue_Name, Max_Retries, -1, []) of
-        {ok, Pid} -> {ok, Pid};
-        Error -> error_logger:error_msg("Start_link error ~p~n", [Error])
-    end.
+    start_session(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
-start_session(_Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
+start_session(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
   when Times_Tried >= Max_Retries ->
     {error, {cassandra_not_available, Attempted_Connections}};
 
-start_session( Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
     case ets_buffer:read_dedicated(Lb_Queue_Name) of
 
         %% Give up if there are no connections available...
@@ -82,35 +79,34 @@ start_session( Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) -
         %% Race condition with another user, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         {missing_ets_data, Lb_Queue_Name, _} ->
-            start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
+            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
 
         %% Attempt to connect to Cassandra node...
         [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
-            error_logger:error_msg("Attempting to connect to ~p~n", [Node]),
-            try_connect(Node, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections);
+            try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, Node);
 
         %% Somehow the load balancer queue died, or something even worse!
         Error -> Error
     end.
 
-try_connect({Ip, Port} = Node, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
     try seestar_session:start_link(Ip, Port, [], [{connect_timeout, 500}]) of
         {ok, Pid} = Session when is_pid(Pid) ->
-            error_logger:error_msg("Connected~n", []),
+            _ = elysium_queue:checkin(Config, Pid),
             Session;
 
         %% If we fail, try again after recording attempt.
         Error ->
-            error_logger:error_msg("Error: ~p~n", [Error]),
-            start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node | Attempted_Connections])
+            Node_Failure = {Node, Error},
+            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node_Failure | Attempted_Connections])
 
-        catch A:B ->
-                error_logger:error_msg("Caught ~p~n", [{A, B}]),
-                start_session(Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node | Attempted_Connections])
+    catch Error:Class ->
+            Node_Failure = {Node, {Error, Class}},
+            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, [Node_Failure | Attempted_Connections])
 
-        %% Ensure that we get the Node checked back in.
-        after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
-        end.
+            %% Ensure that we get the Node checked back in.
+    after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
+    end.
 
 -spec stop(pid()) -> ok.
 %% @doc

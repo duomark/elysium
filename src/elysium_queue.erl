@@ -277,19 +277,19 @@ terminate(Reason, _State_Name,
 
 
 %%%-----------------------------------------------------------------------
-%%% FSM states (currently FSM state is ignored)
-%%%       'ACTIVE'   : allocate worker pids
-%%%       'INACTIVE' : stop allocating worker pids
+%%% FSM states
+%%%       'ACTIVE'   : allocate session pids
+%%%       'INACTIVE' : terminate session pids
 %%%-----------------------------------------------------------------------
 
 -spec 'ACTIVE'(any(), {pid(), reference()}, State)
               -> {reply, ok, 'ACTIVE', State} when State :: #ef_state{}.
 %% @private
-%% @doc Stay in the 'ACTIVE' state.
+%% @doc Move to 'INACTIVE' if requested, otherwise stay in 'ACTIVE' state.
 'ACTIVE'(deactivate, _From, #ef_state{config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
-    Kids = supervisor:which_children(elysium_sup),
-    _ = [supervisor:terminate_child(elysium_sup, Id) || {Id, _, _, _} <- Kids],
+    Kids = supervisor:which_children(elysium_connection_sup),
+    _ = [supervisor:terminate_child(elysium_connection_sup, Pid) || {undefined, Pid, _, _} <- Kids],
     {reply, {length(Kids), Max_Sessions}, 'ACTIVE', #ef_state{} = State};
 'ACTIVE'  (_Any, _From, #ef_state{} = State) ->
     {reply, ok, 'ACTIVE', State}.
