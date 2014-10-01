@@ -1,7 +1,7 @@
 Version Releases
 ================
 
-0.1.2 Compiled config with round-robin load balancing
+0.1.2 Compiled config with round-robin load balancing (Released Oct 1, 2014)
 
   * Allow multiple options for configuration data
 
