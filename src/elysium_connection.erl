@@ -90,7 +90,8 @@ start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
     end.
 
 try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
-    try seestar_session:start_link(Ip, Port, [], [{connect_timeout, 500}]) of
+    Connect_Timeout = elysium_config:connect_timeout(Config),
+    try seestar_session:start_link(Ip, Port, [], [{connect_timeout, Connect_Timeout}]) of
         {ok, Pid} = Session when is_pid(Pid) ->
             _ = elysium_queue:checkin(Config, Pid),
             Session;
