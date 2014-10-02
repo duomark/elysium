@@ -297,7 +297,7 @@ terminate(Reason, _State_Name,
 -spec 'INACTIVE'(any(), {pid(), reference()}, State)
               -> {reply, max_sessions() | ok, 'INACTIVE', State} when State :: #ef_state{}.
 %% @private
-%% @doc Stay in the 'INACTIVE' state.
+%% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
 'INACTIVE'(activate, _From, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
     _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
