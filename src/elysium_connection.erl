@@ -35,8 +35,8 @@
 -export([
          start_link/1,
          stop/1,
-         with_connection/3,
-         with_connection/4
+         with_connection/4,
+         with_connection/5
         ]).
 
 -include("elysium_types.hrl").
@@ -64,6 +64,8 @@
 start_link(Config) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
+    Restart_Delay = elysium_config:max_restart_delay   (Config),
+    ok = timer:sleep(elysium_random:random_int_up_to(Restart_Delay)),
     start_session(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
 start_session(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
@@ -117,39 +119,40 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--spec with_connection(config_type(), fun((pid(), Args) -> Result), Args)
+-spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consist)
                      -> {error, no_db_connections}
-                            | Result when Args   :: [any()],
-                                          Result :: any().
+                            | Result when Args    :: [any()],
+                                          Consist :: seestar:consistency(),
+                                          Result  :: any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
-with_connection(Config, Session_Fun, Args)
-  when is_function(Session_Fun, 2), is_list(Args) ->
+with_connection(Config, Session_Fun, Args, Consistency)
+  when is_function(Session_Fun, 3), is_list(Args) ->
     case elysium_queue:checkout(Config) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
-            try    Session_Fun(Sid, Args)
+            try    Session_Fun(Sid, Args, Consistency)
             after  _ = elysium_queue:checkin(Config, Sid)
             end
     end.
 
--spec with_connection(config_type(), module(), Fun::atom(), Args::[any()])
+-spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
                      -> {error, no_db_connections} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
-with_connection(Config, Mod, Fun, Args)
+with_connection(Config, Mod, Fun, Args, Consistency)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
-    true = erlang:function_exported(Mod, Fun, 2),
+    true = erlang:function_exported(Mod, Fun, 3),
     case elysium_queue:checkout(Config) of
         none_available       -> {error, no_db_connections};
         Sid when is_pid(Sid) ->
-            try    Mod:Fun(Sid, Args)
+            try    Mod:Fun(Sid, Args, Consistency)
             after  _ = elysium_queue:checkin(Config, Sid)
             end
     end.
