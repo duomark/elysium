@@ -205,18 +205,11 @@ succ_checkin(Queue_Name, Max_Sessions, Session_Id) ->
 
 decay_causes_death(Config, _Session_Id) ->
     case elysium_config:decay_probability(Config) of
-        Never_Decays when is_integer(Never_Decays), Never_Decays =:= 0 -> false;
+        Never_Decays when is_integer(Never_Decays), Never_Decays =:= 0 ->
+            false;
         Probability  when is_integer(Probability),  Probability   >  0, Probability =< 1000000 ->
-            _ = maybe_seed(),
-            R = random:uniform(1000000),
+            R = elysium_random:random_int_up_to(1000000),
             R =< Probability
-    end.
-
-maybe_seed() ->
-    case get(random_seed) of
-        undefined -> random:seed(os:timestamp());
-        {X, X, X} -> random:seed(os:timestamp());
-        _         -> ok
     end.
 
 
