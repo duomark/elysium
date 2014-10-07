@@ -43,8 +43,10 @@
 -export([
          start_link/1,
          register_connection_supervisor/1,
+
          activate/0,
          deactivate/0,
+         enable/0,
 
          idle_connections/1,
          checkout/1,
@@ -52,13 +54,23 @@
         ]).
 
 %% FSM states
--type fsm_state_fun_name() :: 'ACTIVE' | 'INACTIVE' | 'WAIT_REGISTER'.
--export(['WAIT_REGISTER'/2, 'INACTIVE'/2, 'ACTIVE'/2]).
--export(['WAIT_REGISTER'/3, 'INACTIVE'/3, 'ACTIVE'/3]).
+-define(active,        'ACTIVE').
+-define(disabled,      'DISABLED').
+-define(inactive,      'INACTIVE').
+-define(wait_register, 'WAIT_REGISTER').
+
+-type fsm_state_fun_name() :: ?active | ?disabled | ?inactive | ?wait_register.
+-type fsm_state_name()     ::  active  | disabled  | inactive  | wait_register.
+
+-export([?active/2, ?disabled/2, ?inactive/2, ?wait_register/2]).
+-export([?active/3, ?disabled/3, ?inactive/3, ?wait_register/3]).
 
 %% FSM callbacks
--export([init/1, handle_event/3, handle_sync_event/4, handle_info/3,
-         terminate/3, code_change/4]).
+-export([
+         init/1,
+         handle_event/3, handle_sync_event/4, handle_info/3,
+         terminate/3, code_change/4
+        ]).
 
 -define(SERVER, ?MODULE).
 
@@ -86,7 +98,7 @@ start_link(Config) ->
 %% @doc Register the connection supervisor so that it can be manually controlled.
 register_connection_supervisor(Connection_Sup)
   when is_pid(Connection_Sup) ->
-    gen_fsm:send_all_state_event(?MODULE, {register_connection_supervisor, Connection_Sup}).
+    gen_fsm:sync_send_all_state_event(?MODULE, {register_connection_supervisor, Connection_Sup}).
 
 -spec activate() -> Max_Allowed::max_sessions().
 %% @doc Change to the active state, creating new Cassandra sessions.
@@ -97,8 +109,14 @@ activate() ->
 %% @doc Change to the inactive state, deleting Cassandra sessions.
 deactivate() ->
     gen_fsm:sync_send_event(?MODULE, deactivate).
+
+-spec enable() -> ok.
+%% @doc Change from disabled to the inactive state, allowing new Cassandra sessions to be created.
+enable() ->
+    gen_fsm:sync_send_event(?MODULE, enable).
     
 -spec idle_connections(config_type()) -> {session_queue_name(), Idle_Count, Max_Count}
+                                          | {missing_buffer, Idle_Count, Max_Count}
                                              when Idle_Count :: max_sessions(),
                                                   Max_Count  :: max_sessions().
 %% @doc Idle connections are those in the queue, not checked out.
@@ -108,8 +126,10 @@ idle_connections(Config) ->
     Buffer_Count = ets_buffer:num_entries_dedicated(Queue_Name),
     report_available_sessions(Queue_Name, Buffer_Count, Max_Sessions).
 
-report_available_sessions(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) -> {Queue_Name, 0, Max};
-report_available_sessions(Queue_Name,                     Num_Sessions, Max) -> {Queue_Name, Num_Sessions, Max}.
+report_available_sessions(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
+    {Queue_Name, {missing_buffer, 0, Max}};
+report_available_sessions(Queue_Name, Num_Sessions, Max) ->
+    {Queue_Name, Num_Sessions, Max}.
     
 -spec checkout(config_type()) -> pid() | none_available.
 %% @doc
@@ -217,6 +237,7 @@ decay_causes_death(Config, _Session_Id) ->
 %%% init, code_change and terminate
 %%%-----------------------------------------------------------------------
 
+-spec init({config_type()}) -> {ok, 'WAIT_REGISTER', #ef_state{}}.
 %% @private
 %% @doc
 %%   Create the connection queue and initialize the internal state.
@@ -236,7 +257,7 @@ init({Config}) ->
     %% Setup the internal state to be able to reference the queues.
     State = #ef_state{config = Config, available_hosts = Lb_Queue_Name,
                       live_sessions = Session_Queue_Name},
-    {ok, 'WAIT_REGISTER', State}.
+    {ok, ?wait_register, State}.
 
 %% @private
 %% @doc
@@ -271,73 +292,121 @@ terminate(Reason, _State_Name,
 
 %%%-----------------------------------------------------------------------
 %%% FSM states
-%%%       'ACTIVE'   : allocate session pids
-%%%       'INACTIVE' : terminate session pids
+%%%       'ACTIVE'        : allocate session pids
+%%%       'DISABLED'      : application configured elysium off
+%%%       'INACTIVE'      : terminate session pids
+%%%       'WAIT_REGISTER' : waiting for elysium_connection_sup to start
 %%%-----------------------------------------------------------------------
 
--spec 'ACTIVE'(any(), {pid(), reference()}, State)
-              -> {reply, ok, 'ACTIVE', State} when State :: #ef_state{}.
+%%% Synchronous calls
+
+-spec ?active(deactivate, {pid(), reference()}, State)
+              -> {reply, ok, ?inactive, State} when State :: #ef_state{}.
 %% @private
 %% @doc Move to 'INACTIVE' if requested, otherwise stay in 'ACTIVE' state.
-'ACTIVE'(deactivate, _From, #ef_state{config=Config} = State) ->
+?active(deactivate, _From, #ef_state{config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
     Kids = supervisor:which_children(elysium_connection_sup),
     _ = [supervisor:terminate_child(elysium_connection_sup, Pid) || {undefined, Pid, _, _} <- Kids],
-    {reply, {length(Kids), Max_Sessions}, 'ACTIVE', #ef_state{} = State};
-'ACTIVE'  (_Any, _From, #ef_state{} = State) ->
-    {reply, ok, 'ACTIVE', State}.
+    {reply, {length(Kids), Max_Sessions}, ?inactive, #ef_state{} = State};
+?active  (_Any, _From, #ef_state{} = State) ->
+    {reply, ok, ?active, State}.
 
--spec 'INACTIVE'(any(), {pid(), reference()}, State)
-              -> {reply, max_sessions() | ok, 'INACTIVE', State} when State :: #ef_state{}.
+-spec ?disabled(enable, {pid(), reference()}, State)
+              -> {reply, inactive, ?inactive, State} when State :: #ef_state{}.
+%% @private
+%% @doc Move to 'INACTIVE' if enabled, otherwise stay in 'DISABLED' state.
+?disabled(enable, _From, #ef_state{} = State) -> {reply, inactive, ?inactive, State};
+?disabled(_Any,   _From, #ef_state{} = State) -> {reply, disabled, ?disabled, State}.
+
+-spec ?inactive(activate, {pid(), reference()}, State)
+              -> {reply, max_sessions(), ?active, State} when State :: #ef_state{}.
 %% @private
 %% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
-'INACTIVE'(activate, _From, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
+?inactive(activate, _From, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
     _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
          || _N <- lists:seq(1, Max_Sessions)],
-    {reply, Max_Sessions, 'ACTIVE', State};
-'INACTIVE'(_Any, _From, #ef_state{} = State) ->
-    {reply, ok, 'INACTIVE', State}.
+    {reply, Max_Sessions, ?active, State};
+?inactive(_Any, _From, #ef_state{} = State) ->
+    {reply, ok, ?inactive, State}.
 
--spec 'WAIT_REGISTER'(any(), {pid(), reference()}, State)
-              -> {reply, ok, 'WAIT_REGISTER', State} when State :: #ef_state{}.
+-spec ?wait_register(deactivate, {pid(), reference()}, State)
+                    -> {reply, ok, ?inactive, State} when State :: #ef_state{}.
 %% @private
 %% @doc Stay in the 'WAIT_REGISTER' state.
-'WAIT_REGISTER'(_Any, _From, #ef_state{} = State) ->
-    {reply, ok, 'WAIT_REGISTER', State}.
+?wait_register(deactivate, _From, #ef_state{} = State) -> {reply, ok, ?inactive,      State};
+?wait_register(_Any,       _From, #ef_state{} = State) -> {reply, ok, ?wait_register, State}.
 
 
--spec 'ACTIVE'(activate, State) -> {next_state, 'ACTIVE', State} when State :: #ef_state{}.
+%%% Asynchronous calls
+
+-spec ?active(activate, State) -> {next_state, ?active, State} when State :: #ef_state{}.
 %% @private
 %% @doc Deactivate if requested, from the 'ACTIVE' state.
-'ACTIVE'(deactivate, #ef_state{} = State) ->
+?active(deactivate, #ef_state{} = State) ->
     Kids = supervisor:which_children(elysium_sup),
     _ = [supervisor:terminate_child(elysium_sup, Id) || {Id, _, _, _} <- Kids],
-    {next_state, 'INACTIVE', State};
-'ACTIVE'(_Other, #ef_state{} = State) ->
-    {next_state, 'ACTIVE',   State}.
+    {next_state, ?inactive, State};
+?active(_Other, #ef_state{} = State) ->
+    {next_state, ?active,   State}.
 
--spec 'INACTIVE'(activate, State) -> {next_state, 'ACTIVE', State} when State :: #ef_state{}.
+-spec ?disabled(enable, State) -> {next_state, ?inactive, State} when State :: #ef_state{}.
+%% @private
+%% @doc Move to 'INACTIVE' if enabled, otherwise stay in 'DISABLED' state.
+?disabled(enable, #ef_state{} = State) -> {next_state, ?inactive, State};
+?disabled(_Any,   #ef_state{} = State) -> {next_state, ?disabled, State}.
+
+-spec ?inactive(activate, State) -> {next_state, ?active, State} when State :: #ef_state{}.
 %% @private
 %% @doc Activate if requested, from the 'INACTIVE' state.
-'INACTIVE'(activate, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
+?inactive(activate, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
     _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
          || _N <- lists:seq(1, Max_Sessions)],
-    {next_state, 'ACTIVE', State};
-'INACTIVE'(_Other, #ef_state{} = State) ->
-    {next_state, 'INACTIVE', State}.
+    {next_state, ?active, State};
+?inactive(_Other, #ef_state{} = State) ->
+    {next_state, ?inactive, State}.
 
--spec 'WAIT_REGISTER'(any(), State) -> {next_state, 'INACTIVE' | 'WAIT_REGISTER', State}
-                                           when State :: #ef_state{}.
+-spec ?wait_register(deactivate, State) -> {next_state, ?inactive, State} when State :: #ef_state{}.
 %% @private
 %% @doc Deactivate if requested, from the 'WAIT_REGISTER' state.
-'WAIT_REGISTER'(deactivate, #ef_state{} = State) -> {next_state, 'INACTIVE',      State};
-'WAIT_REGISTER'(_Other,     #ef_state{} = State) -> {next_state, 'WAIT_REGISTER', State}.
+?wait_register(deactivate, #ef_state{} = State) -> {next_state, ?inactive,      State};
+?wait_register(_Other,     #ef_state{} = State) -> {next_state, ?wait_register, State}.
 
 
 %%%-----------------------------------------------------------------------
 %%% Event callbacks
+%%%-----------------------------------------------------------------------
+
+-spec handle_sync_event(current_state | {register_connection_supervisor, pid()},
+                        {pid(), reference()}, State_Name, State)
+                 -> {reply, fsm_state_name() | ok | {error, tuple()}, State_Name, State}
+                        when State_Name :: fsm_state_fun_name(),
+                             State      :: #ef_state{}.
+%% @private
+%% @doc Register the connection supervisor; report the current state of the FSM.
+handle_sync_event({register_connection_supervisor, Connection_Sup}, _From,
+                  ?wait_register, #ef_state{connection_sup=undefined} = State)
+  when is_pid(Connection_Sup) ->
+    New_State = State#ef_state{connection_sup=Connection_Sup},
+    case application:get_env(elysium) of
+        undefined     -> {reply, ok, ?disabled, New_State};
+        {ok, enabled} -> {reply, ok, ?inactive, New_State};
+        _Disabled     -> {reply, ok, ?disabled, New_State}
+    end;
+handle_sync_event({register_connection_supervisor, _Connection_Sup} = Event, _From, State_Name, #ef_state{} = State) ->
+    error_logger:error_msg("Unexpected event ~p for state name ~p in state ~p~n", [Event, State_Name, State]),
+    {reply, {error, {wrong_state, State_Name}}, State_Name, State};
+
+handle_sync_event(current_state, _From, ?active,        #ef_state{} = State) -> {reply, active,        ?active,        State};
+handle_sync_event(current_state, _From, ?disabled,      #ef_state{} = State) -> {reply, disabled,      ?disabled,      State};
+handle_sync_event(current_state, _From, ?inactive,      #ef_state{} = State) -> {reply, active,        ?active,        State};
+handle_sync_event(current_state, _From, ?wait_register, #ef_state{} = State) -> {reply, wait_register, ?wait_register, State}.
+
+
+%%%-----------------------------------------------------------------------
+%%% Unused callbacks
 %%%-----------------------------------------------------------------------
 
 -spec handle_event(any(), State_Name, State)
@@ -345,26 +414,9 @@ terminate(Reason, _State_Name,
                         when State_Name :: fsm_state_fun_name(),
                              State      :: #ef_state{}.
 %% @private
-%% @doc Record the connection_supervisor pid that registers with us.
-handle_event({register_connection_supervisor, Connection_Sup},
-             'WAIT_REGISTER', #ef_state{connection_sup=undefined} = State)
-  when is_pid(Connection_Sup) ->
-    {next_state, 'INACTIVE', State#ef_state{connection_sup=Connection_Sup}};
-
-handle_event({register_connection_supervisor, _Connection_Sup} = Event, 
-             State_Name, #ef_state{} = State) ->
-    error_logger:error_msg("Unexpected event ~p for state name ~p in state ~p~n",
-                           [Event, State_Name, State]),
-    {next_state, State_Name, State};
-
-%% Ignore other messages...
+%% @doc Unused function.
 handle_event(_Any, State_Name, #ef_state{} = State) ->
     {next_state, State_Name, State}.
-
-
-%%%-----------------------------------------------------------------------
-%%% Unused callbacks
-%%%-----------------------------------------------------------------------
 
 -spec handle_info(any(), State_Name, State)
                  -> {next_state, State_Name, State}
@@ -374,12 +426,3 @@ handle_event(_Any, State_Name, #ef_state{} = State) ->
 %% @doc Unused function.
 handle_info (_Any, State_Name, #ef_state{} = State) ->
     {next_state, State_Name, State}.
-
--spec handle_sync_event(any(), {pid(), reference()}, State_Name, State)
-                 -> {reply, ok, State_Name, State}
-                        when State_Name :: fsm_state_fun_name(),
-                             State      :: #ef_state{}.
-%% @private
-%% @doc Unused function
-handle_sync_event(_Any, _From, State_Name, #ef_state{} = State) ->
-    {reply, ok, State_Name, State}.
