@@ -97,7 +97,7 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
     Connect_Timeout = elysium_config:connect_timeout(Config),
     try seestar_session:start_link(Ip, Port, [], [{connect_timeout, Connect_Timeout}]) of
         {ok, Pid} = Session when is_pid(Pid) ->
-            _ = elysium_queue:checkin(Config, Pid),
+            _ = elysium_overload:checkin_connection(Config, Pid),
             Session;
 
         %% If we fail, try again after recording attempt.
@@ -142,7 +142,7 @@ stop(Session_Id)
 %% @end
 with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
   when is_function(Session_Fun, 3), is_list(Args) ->
-    case elysium_queue:checkout(Config) of
+    case elysium_overload:checkout_connection(Config) of
         none_available -> buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         Sid when is_pid(Sid) ->
             try    Session_Fun(Sid, Args, Consistency)
@@ -172,7 +172,7 @@ buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, overload) ->
 with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
     true = erlang:function_exported(Mod, Fun, 3),
-    case elysium_queue:checkout(Config) of
+    case elysium_overload:checkout_connection(Config) of
         none_available       -> buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         Sid when is_pid(Sid) ->
             try    Mod:Fun(Sid, Args, Consistency)
