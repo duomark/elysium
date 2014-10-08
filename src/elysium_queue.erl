@@ -98,22 +98,22 @@ start_link(Config) ->
 %% @doc Register the connection supervisor so that it can be manually controlled.
 register_connection_supervisor(Connection_Sup)
   when is_pid(Connection_Sup) ->
-    gen_fsm:sync_send_all_state_event(?MODULE, {register_connection_supervisor, Connection_Sup}).
+    gen_fsm:sync_send_all_state_event(?SERVER, {register_connection_supervisor, Connection_Sup}).
 
 -spec activate() -> Max_Allowed::max_sessions().
 %% @doc Change to the active state, creating new Cassandra sessions.
 activate() ->
-    gen_fsm:sync_send_event(?MODULE, activate).
+    gen_fsm:sync_send_event(?SERVER, activate).
 
 -spec deactivate() -> {Num_Terminated::max_sessions(), Max_Allowed::max_sessions()}.
 %% @doc Change to the inactive state, deleting Cassandra sessions.
 deactivate() ->
-    gen_fsm:sync_send_event(?MODULE, deactivate).
+    gen_fsm:sync_send_event(?SERVER, deactivate).
 
 -spec enable() -> ok.
 %% @doc Change from disabled to the inactive state, allowing new Cassandra sessions to be created.
 enable() ->
-    gen_fsm:sync_send_event(?MODULE, enable).
+    gen_fsm:sync_send_event(?SERVER, enable).
     
 -spec idle_connections(config_type()) -> {session_queue_name(), Idle_Count, Max_Count}
                                           | {missing_buffer, Idle_Count, Max_Count}

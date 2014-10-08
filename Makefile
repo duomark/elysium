@@ -23,7 +23,7 @@ CT_OPTS := -cover test/elysium.coverspec
 ## EDOC_DIRS := ["src", "examples"]
 ## EDOC_OPTS := {preprocess, true}, {source_path, ${EDOC_DIRS}}, nopackages, {subpackages, true}
 
-ERL_PATH := -smp enable -pa ../elysium/ebin deps/*/ebin 
+ERL_PATH := -smp enable -pa ebin deps/*/ebin
 SERVER := erl $(ERL_PATH)
 
 include erlang.mk
