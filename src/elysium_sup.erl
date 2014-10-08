@@ -12,6 +12,12 @@
 %%%   for any reason, a supervisor will replace it and place the new
 %%%   connection at the end of the queue.
 %%%
+%%%   A second FSM was added in v0.1.4 to allow for optional buffering
+%%%   of connection requests. This approach allows spikes in the traffic
+%%%   which exceed the number of available elysium sessions. Be careful
+%%%   when using this feature as it masks the backpressure signal when all
+%%%   sessions are occupied.
+%%%
 %%% @since 0.1.0
 %%% @end
 %%%------------------------------------------------------------------------------
@@ -60,7 +66,8 @@ start_link(Config) ->
 %%   any connections are created.
 %% @end
 init({Config}) ->
-    true     = elysium_config:is_valid_config (Config),
-    Fsm_Proc = ?CHILD(elysium_queue,          [Config]),
-    Conn_Sup = ?SUPER(elysium_connection_sup, []),
-    {ok, {{rest_for_one, 10, 10}, [Fsm_Proc, Conn_Sup]}}.
+    true        = elysium_config:is_valid_config (Config),
+    Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
+    Buffer_Proc = ?CHILD(elysium_overload,             []),
+    Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
+    {ok, {{rest_for_one, 10, 10}, [Queue_Proc, Buffer_Proc, Conn_Sup]}}.

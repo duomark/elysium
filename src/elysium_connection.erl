@@ -35,11 +35,13 @@
 -export([
          start_link/1,
          stop/1,
-         with_connection/4,
-         with_connection/5
+         with_connection/5,
+         with_connection/6
         ]).
 
 -include("elysium_types.hrl").
+-type buffering() :: none | overload.
+-export_types([buffering/0]).
 
 
 %%%-----------------------------------------------------------------------
@@ -119,40 +121,65 @@ stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
--spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consist)
+
+-spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency, buffering())
                      -> {error, no_db_connections}
-                            | Result when Args    :: [any()],
-                                          Consist :: seestar:consistency(),
-                                          Result  :: any().
+                            | Result when Args        :: [any()],
+                                          Consist     :: seestar:consistency(),
+                                          Consistency :: seestar:consistency(),
+                                          Result      :: any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
+%%
+%%   Sessions are checked out from the elysium_queue,
+%%   but are checked in to elysium_overload so that
+%%   any pending requests can be serviced immediately.
+%%   If none are pending, or one pending request has
+%%   been executed, elysium_overload uses elysium_queue
+%%   to perform the checkin.
 %% @end
-with_connection(Config, Session_Fun, Args, Consistency)
+with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
   when is_function(Session_Fun, 3), is_list(Args) ->
     case elysium_queue:checkout(Config) of
-        none_available       -> {error, no_db_connections};
+        none_available -> buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         Sid when is_pid(Sid) ->
             try    Session_Fun(Sid, Args, Consistency)
-            after  _ = elysium_queue:checkin(Config, Sid)
+            after  _ = elysium_overload:checkin_connection(Config, Sid)
             end
     end.
 
--spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
+buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none)     -> {error, no_db_connections};
+buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, overload) ->
+    elysium_overload:buffer_request({bare_fun, Config, Session_Fun, Args, Consistency}).
+
+
+-spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
                      -> {error, no_db_connections} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
+%%
+%%   Sessions are checked out from the elysium_queue,
+%%   but are checked in to elysium_overload so that
+%%   any pending requests can be serviced immediately.
+%%   If none are pending, or one pending request has
+%%   been executed, elysium_overload uses elysium_queue
+%%   to perform the checkin.
 %% @end
-with_connection(Config, Mod, Fun, Args, Consistency)
+with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
     true = erlang:function_exported(Mod, Fun, 3),
     case elysium_queue:checkout(Config) of
-        none_available       -> {error, no_db_connections};
+        none_available       -> buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         Sid when is_pid(Sid) ->
             try    Mod:Fun(Sid, Args, Consistency)
-            after  _ = elysium_queue:checkin(Config, Sid)
+            after  _ = elysium_overload:checkin_connection(Config, Sid)
             end
     end.
+
+buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency, none)     -> {error, no_db_connections};
+buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, overload) ->
+    elysium_overload:buffer_request({mod_fun, Config, Mod, Fun, Args, Consistency}).
