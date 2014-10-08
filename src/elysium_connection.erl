@@ -40,6 +40,8 @@
         ]).
 
 -include("elysium_types.hrl").
+-type buffering() :: none | overload.
+-export_types([buffering/0]).
 
 
 %%%-----------------------------------------------------------------------
@@ -120,7 +122,6 @@ stop(Session_Id)
     seestar_session:stop(Session_Id).
 
 
--type buffering() :: none | overload.
 -spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency, buffering())
                      -> {error, no_db_connections}
                             | Result when Args        :: [any()],

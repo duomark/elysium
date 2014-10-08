@@ -93,7 +93,7 @@ checkin_connection(Config, Session_Id)
   when is_pid(Session_Id) ->
     case is_process_alive(Session_Id) of
         false -> elysium_queue:checkin(Config, Session_Id);
-        true  -> gen_fsm:send_event(?MODULE, {checkin, Config, Session_Id})
+        true  -> gen_fsm:sync_send_event(?MODULE, {checkin, Config, Session_Id})
     end.
 
 -spec buffer_request(query_request()) -> any().
