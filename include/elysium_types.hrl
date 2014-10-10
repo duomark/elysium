@@ -3,8 +3,9 @@
 
 -type lb_queue_name()       :: ets_buffer:buffer_name().
 -type session_queue_name()  :: ets_buffer:buffer_name().
+-type requests_queue_name() :: ets_buffer:buffer_name().
 -type host_list()           :: [{Ip_Addr::string(), Port::pos_integer()}].
--type timeout()             :: pos_integer().      %% in milliseconds
+-type timeout_in_ms()       :: pos_integer().      %% in milliseconds
 -type max_sessions()        :: pos_integer().
 -type max_retries()         :: non_neg_integer().
 -type decay_prob()          :: non_neg_integer().  %% number of chances in 1M of death

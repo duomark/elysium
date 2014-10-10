@@ -76,6 +76,7 @@
           config          :: config_type(),
           available_hosts :: lb_queue_name(),
           live_sessions   :: session_queue_name(),
+          requests        :: requests_queue_name(),
           connection_sup  :: pid()
          }).
 
@@ -124,18 +125,26 @@ enable() ->
 init({Config}) ->
     %% Setup a load balancing FIFO Queue for all the Cassandra nodes to contact.
     Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
-    ets_buffer:create_dedicated(Lb_Queue_Name, fifo),
+    Lb_Queue_Name = ets_buffer:create_dedicated(Lb_Queue_Name, fifo),
     _ = [ets_buffer:write_dedicated(Lb_Queue_Name, Node)
          || {_Ip, _Port} = Node <- elysium_config:round_robin_hosts(Config),
             is_list(_Ip), is_integer(_Port), _Port > 0],
 
     %% Create a FIFO Queue for the live sessions that are connected to Cassandra.
     Session_Queue_Name = elysium_config:session_queue_name(Config),
-    ets_buffer:create_dedicated(Session_Queue_Name, fifo),
+    Session_Queue_Name = ets_buffer:create_dedicated(Session_Queue_Name, fifo),
+
+    %% Create a FIFO Queue for pending query requests.
+    Pending_Queue_Name = elysium_config:requests_queue_name(Config),
+    Pending_Queue_Name = ets_buffer:create_dedicated(Pending_Queue_Name, fifo),
 
     %% Setup the internal state to be able to reference the queues.
-    State = #ef_state{config = Config, available_hosts = Lb_Queue_Name,
-                      live_sessions = Session_Queue_Name},
+    State = #ef_state{
+               config          = Config,
+               available_hosts = Lb_Queue_Name,
+               live_sessions   = Session_Queue_Name,
+               requests        = Pending_Queue_Name
+              },
     {ok, ?wait_register, State}.
 
 %% @private

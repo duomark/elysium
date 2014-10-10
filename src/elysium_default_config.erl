@@ -19,6 +19,8 @@
 -export([
          cassandra_lb_queue/0,
          cassandra_session_queue/0,
+         cassandra_requests_queue/0,
+         cassandra_request_reply_timeout/0,
          cassandra_hosts/0,
          cassandra_max_restart_delay/0,
          cassandra_connect_timeout/0,
@@ -38,15 +40,23 @@ cassandra_lb_queue() -> elysium_lb_queue.
 %% @doc Using session queue 'elysium_connection_queue'.
 cassandra_session_queue() -> elysium_connection_queue.
 
+-spec cassandra_requests_queue() -> requests_queue_name().
+%% @doc Using pending requests queue 'elysium_requests_queue'.
+cassandra_requests_queue() -> elysium_requests_queue.
+
+-spec cassandra_request_reply_timeout() -> timeout_in_ms().
+%% @doc Pending query requests should only wait 5 seconds for an available session.
+cassandra_request_reply_timeout() -> 5000.
+
 -spec cassandra_hosts() -> host_list().
 %% @doc Only local host: [{"127.0.0.1", 9042}].
 cassandra_hosts() -> [{"127.0.0.1", 9042}].
 
--spec cassandra_max_restart_delay() -> timeout().
+-spec cassandra_max_restart_delay() -> timeout_in_ms().
 %% @doc Randomly delay connect from 1-100 milliseconds on startup.
 cassandra_max_restart_delay() -> 100.
 
--spec cassandra_connect_timeout() -> timeout().
+-spec cassandra_connect_timeout() -> timeout_in_ms().
 %% @doc Timeout after 50 milliseconds if a seestar session can't be established.
 cassandra_connect_timeout() -> 50.
      

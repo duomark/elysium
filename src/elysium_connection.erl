@@ -152,7 +152,7 @@ with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
 
 buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none)     -> {error, no_db_connections};
 buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, overload) ->
-    elysium_overload:buffer_request({bare_fun, Config, Session_Fun, Args, Consistency}).
+    elysium_overload:buffer_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}).
 
 
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
@@ -182,4 +182,4 @@ with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
 
 buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency, none)     -> {error, no_db_connections};
 buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, overload) ->
-    elysium_overload:buffer_request({mod_fun, Config, Mod, Fun, Args, Consistency}).
+    elysium_overload:buffer_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}).
