@@ -166,18 +166,16 @@ checkin_connection(Config, Session_Id)
 %%   it will execute the query and reply back to the original requestor.
 %% @end
 buffer_request(Config, Query_Request) ->
-    From          = {self(), make_ref()},  % Spoof gen_fsm:reply(From, Reply) later.
+    Reply_Ref     = make_ref(),
     Timestamp     = os:timestamp(),
     Pending_Queue = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    case ets_buffer:write_dedicated(Pending_Queue, {From, Timestamp, Query_Request}) of
+    case ets_buffer:write_dedicated(Pending_Queue, {{self(), Reply_Ref}, Timestamp}) of
         Available when is_integer(Available), Available > 0 ->
-            receive {From, Reply} -> Reply
+            receive {Reply_Ref, Session_Id} -> exec_pending_request(Session_Id, Query_Request)
             after   Reply_Timeout -> {timeout, Reply_Timeout}
             end
     end.
-    %% TODO: Remove me!
-    %% gen_fsm:sync_send_event(?SERVER, {buffer_request, Query_Request}).
 
 
 %%%-----------------------------------------------------------------------
@@ -302,9 +300,6 @@ terminate(Reason, _State_Name, #eo_state{}) ->
             -> {reply, {unknown_request, any()}, ?empty, State} when State :: #eo_state{}.
 %% @private
 %% @doc Empty queues stay empty until a queue_request message arrives.
-%% ?empty({buffer_request, Query_Request}, From, #eo_state{requests=Queue} = State) ->
-%%     New_Queue = queue:in({From, Query_Request}, Queue),
-%%     {next_state, ?buffering, State#eo_state{requests=New_Queue}};
 ?empty(Any, _From, #eo_state{} = State) ->
     {reply, {unknown_request, Any}, ?empty, #eo_state{} = State}.
 
@@ -323,9 +318,6 @@ terminate(Reason, _State_Name, #eo_state{}) ->
 %%   If the queue of buffered tasks grows to the configuration overload_spike
 %%   size, the FSM transitions to the 'OVERLOADED' state. 
 %% @end
-%% ?buffering({buffer_request, Query_Request}, From, #eo_state{requests=Queue} = State) ->
-%%     New_Queue = queue:in({From, Query_Request}, Queue),
-%%     {next_state, ?buffering, State#eo_state{requests=New_Queue}};
 ?buffering(Any, _From, #eo_state{} = State) ->
     {reply, {unknown_request, Any}, ?buffering, State}.
 
@@ -336,9 +328,6 @@ terminate(Reason, _State_Name, #eo_state{}) ->
                              State   :: #eo_state{}.
 %% @private
 %% @doc Report overload status.
-%% ?overloaded({buffer_request, Query_Request}, From, #eo_state{requests=Queue} = State) ->
-%%     New_State = State#eo_state{requests=queue:in({From, Query_Request}, Queue)},
-%%     {next_state, ?overloaded, New_State};
 ?overloaded(Any, _From, #eo_state{} = State) ->
     {reply, {unknown_request, Any}, ?overloaded, State}.
 
@@ -351,17 +340,20 @@ terminate(Reason, _State_Name, #eo_state{}) ->
 ?empty({checkin, Config, Sid}, #eo_state{} = State) ->
     Pending_Queue = elysium_config:requests_queue_name(Config),
     case ets_buffer:num_entries_dedicated(Pending_Queue) of
-         0 -> checkin_empty_pending(Config, Sid, State);
-        _N -> case ets_buffer:read_dedicated(Pending_Queue) of
+          0 -> checkin_empty_pending(Config, Sid, State);
+        _N1 -> case ets_buffer:read_dedicated(Pending_Queue) of
                   [] -> checkin_empty_pending(Config, Sid, State);
-                  [{From, When_Originally_Queued, Query_Request}] ->
+                  %% Handle missing_ets_data here
+                  [{{From_Pid, Ref}, When_Originally_Queued}] ->
+                       Reply_Timeout = elysium_config:request_reply_timeout (Config),
                       case timer:now_diff(os:timestamp(), When_Originally_Queued) of
-                          Expired when Expired < 0 -> ?empty({checkin, Config, Sid}, State);
+                          Expired when Expired > Reply_Timeout*1000 -> ?empty({checkin, Config, Sid}, State);
                           _Remaining_Time ->
-                              _ = spawn_monitor(fun() -> exec_pending_request(Sid, From, Query_Request) end),
+                              From_Pid ! {Ref, Sid},
+                              %% _ = spawn_monitor(fun() -> exec_pending_request(Sid, Query_Request) end),
                               case ets_buffer:num_entries_dedicated(Pending_Queue) of
-                                   0 -> {next_state, ?empty,     State};
-                                  _N -> {next_state, ?buffering, State}
+                                    0 -> {next_state, ?empty,     State};
+                                  _N2 -> {next_state, ?buffering, State}
                               end
                       end
               end
@@ -377,13 +369,20 @@ terminate(Reason, _State_Name, #eo_state{}) ->
 %% @doc Checkin of session id gets reused once asynchronously to handle a buffered request.
 ?buffering({checkin, Config, Sid}, #eo_state{} = State) ->
     Pending_Queue = elysium_config:requests_queue_name(Config),
-    case ets_buffer:read_dedicated(Pending_Queue) of
+    Data = ets_buffer:read_dedicated(Pending_Queue),
+    error_logger:error_msg("Buffering Read dedicated: ~p~n", [Data]),
+    case Data of
         [] -> checkin_empty_pending(Config, Sid, State);
-        [{From, When_Originally_Queued, Query_Request}] ->
+        %% Handle missing_ets_data here
+        [{{From_Pid, Ref}, When_Originally_Queued}] ->
+            Reply_Timeout = elysium_config:request_reply_timeout (Config),
             case timer:now_diff(os:timestamp(), When_Originally_Queued) of
-                Expired when Expired < 0 -> ?buffering({checkin, Config, Sid}, State);
+                Expired when Expired > Reply_Timeout * 1000 ->
+                    error_logger:error_msg("Expired time ~p, checking in immediately", [Expired]),
+                    ?buffering({checkin, Config, Sid}, State);
                 _Remaining_Time ->
-                    _ = spawn_monitor(fun() -> exec_pending_request(Sid, From, Query_Request) end),
+                    From_Pid ! {Ref, Sid},
+                    %% _ = spawn_monitor(fun() -> exec_pending_request(Sid, Query_Request) end),
                     case ets_buffer:num_entries_dedicated(Pending_Queue) of
                          0 -> {next_state, ?empty,     State};
                         _N -> {next_state, ?buffering, State}
@@ -407,12 +406,12 @@ checkin_empty_pending(Config, Sid, State) ->
 %% Config on the original pending query. If you somehow mix connection queues
 %% by passing different Configs, the clusters which queries run on may get
 %% mixed up resulting in queries/updates/deletes talking to the wrong clusters.
-exec_pending_request(Sid, From, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
-    try   gen_fsm:reply(From, Query_Fun(Sid, Args, Consistency))
+exec_pending_request(Sid, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
+    try   Query_Fun(Sid, Args, Consistency)
     after _ = checkin_immediate(Config, Sid)
     end;
-exec_pending_request(Sid, From, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
-    try   gen_fsm:reply(From, Mod:Fun(Sid, Args, Consistency))
+exec_pending_request(Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
+    try   Mod:Fun(Sid, Args, Consistency)
     after _ = checkin_immediate(Config, Sid)
     end.
 
@@ -439,6 +438,26 @@ report_queue_length(Current_Status, Current_State_Name, #eo_state{requests=Queue
 
 
 %%%-----------------------------------------------------------------------
+%%% Info callbacks
+%%%-----------------------------------------------------------------------
+
+-spec handle_info(any(), State_Name, State)
+                 -> {next_state, State_Name, State}
+                        when State_Name :: fsm_state_fun_name(),
+                             State      :: #eo_state{}.
+%% @private
+%% @doc Reports any failed pending query results occurring in spawned pending request results.
+handle_info ({'DOWN', _Ref, process, _Pid, normal}, State_Name, #eo_state{} = State) ->
+    {next_state, State_Name, State};
+handle_info ({'DOWN', _Ref, process, _Pid, Reason}, State_Name, #eo_state{} = State) ->
+    error_logger:error_msg("Failed query during ~p: ~p~n", [State_Name, Reason]),
+    {next_state, State_Name, State};
+handle_info (Unhandled_Msg, State_Name, #eo_state{} = State) ->
+    error_logger:error_msg("Unknown message ~p received in ~p", [Unhandled_Msg, ?MODULE]),
+    {next_state, State_Name, State}.
+
+
+%%%-----------------------------------------------------------------------
 %%% Unused callbacks
 %%%-----------------------------------------------------------------------
 
@@ -449,14 +468,4 @@ report_queue_length(Current_Status, Current_State_Name, #eo_state{requests=Queue
 %% @private
 %% @doc Unused function.
 handle_event(_Any, State_Name, #eo_state{} = State) ->
-    {next_state, State_Name, State}.
-
--spec handle_info(any(), State_Name, State)
-                 -> {next_state, State_Name, State}
-                        when State_Name :: fsm_state_fun_name(),
-                             State      :: #eo_state{}.
-%% @private
-%% @doc Unused function.
-handle_info (_Any, State_Name, #eo_state{} = State) ->
-    error_logger:error_msg("Info during ~p: ~p~n", [State_Name, _Any]),
     {next_state, State_Name, State}.
