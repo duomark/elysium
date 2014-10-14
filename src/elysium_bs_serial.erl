@@ -113,22 +113,25 @@ pend_request(Config, Query_Request) ->
 wait_for_session(_Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
         {Sid_Reply_Ref, Session_Id} ->
-            Worker_Fun = fun() -> exec_pending_request(Session_Id, Query_Request) end,
             case timer:now_diff(os:timestamp(), Start_Time) of
                 Expired when Expired > Reply_Timeout * 1000 ->
-                    {timeout, Reply_Timeout};
+                    {session_wait_timeout, Reply_Timeout};
                 Remaining_Time ->
+                    Self = self(),
                     Worker_Reply_Ref = make_ref(),
+                    Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self,
+                                                               Session_Id, Query_Request) end,
+                    _ = spawn_monitor(Worker_Fun),
                     Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
-                    receive_worker_reply(Worker_Reply_Ref, spawn_monitor(Worker_Fun), Timeout_Remaining)
+                    receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining)
             end
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
 %% TODO: This receive loop needs to handle status queries and kill requests so it can be monitored.
-receive_worker_reply(_Worker_Reply_Ref, {_Worker_Pid, Worker_Ref}, Timeout_Remaining) ->
-    receive {Worker_Ref, Reply} -> Reply
-    after   Timeout_Remaining   -> {worker_reply_timeout, Timeout_Remaining}
+receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining) ->
+    receive {Worker_Reply_Ref, Reply} -> Reply
+    after   Timeout_Remaining         -> {worker_reply_timeout, Timeout_Remaining}
     end.
 
 
@@ -235,11 +238,11 @@ checkin_pending(Config, Sid) ->
           0 -> checkin_immediate(Config, Sid);
         _N1 -> case ets_buffer:read_dedicated(Pending_Queue) of
                   [] -> checkin_immediate(Config, Sid);
-                  [{_From, When_Originally_Queued, Query_Request}] ->
+                  [{{Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
                       case timer:now_diff(os:timestamp(), When_Originally_Queued) of
                           Expired when Expired < 0 -> checkin_pending(Config, Sid);
                           _Remaining_Time ->
-                              _ = spawn_monitor(fun() -> exec_pending_request(Sid, Query_Request) end),
+                              Pid ! {Sid_Reply_Ref, Sid},
                               case ets_buffer:num_entries_dedicated(Pending_Queue) of
                                     0 -> checkin_immediate (Config, Sid);
                                   _N2 -> checkin_pending   (Config, Sid)
@@ -252,11 +255,13 @@ checkin_pending(Config, Sid) ->
 %% Config on the original pending query. If you somehow mix connection queues
 %% by passing different Configs, the clusters which queries run on may get
 %% mixed up resulting in queries/updates/deletes talking to the wrong clusters.
-exec_pending_request(Sid, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
-    try   Query_Fun(Sid, Args, Consistency)
+exec_pending_request(Reply_Ref, Reply_Pid, Sid, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
+    try   Reply = Query_Fun(Sid, Args, Consistency),
+          Reply_Pid ! {Reply_Ref, Reply}
     after _ = checkin_immediate(Config, Sid)
     end;
-exec_pending_request(Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
-    try   Mod:Fun(Sid, Args, Consistency)
+exec_pending_request(Reply_Ref, Reply_Pid, Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
+    try   Reply = Mod:Fun(Sid, Args, Consistency),
+          Reply_Pid ! {Reply_Ref, Reply}
     after _ = checkin_immediate(Config, Sid)
     end.

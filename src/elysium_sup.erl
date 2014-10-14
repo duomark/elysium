@@ -68,6 +68,5 @@ start_link(Config) ->
 init({Config}) ->
     true        = elysium_config:is_valid_config (Config),
     Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
-    Buffer_Proc = ?CHILD(elysium_bs_serial,            []),
     Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
-    {ok, {{rest_for_one, 10, 10}, [Queue_Proc, Buffer_Proc, Conn_Sup]}}.
+    {ok, {{rest_for_one, 10, 10}, [Queue_Proc, Conn_Sup]}}.
