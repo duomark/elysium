@@ -67,10 +67,12 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/8,
+         make_vbisect_config/10,
 
          load_balancer_queue/1,
          session_queue_name/1,
+         requests_queue_name/1,
+         request_reply_timeout/1,
          round_robin_hosts/1,
          max_restart_delay/1,
          connect_timeout/1,
@@ -83,9 +85,11 @@
 
 -callback cassandra_lb_queue()                  -> lb_queue_name().
 -callback cassandra_session_queue()             -> session_queue_name().
+-callback cassandra_requests_queue()            -> requests_queue_name().
+-callback cassandra_request_reply_timeout()     -> timeout_in_ms().
 -callback cassandra_hosts()                     -> host_list().
--callback cassandra_max_restart_delay()         -> timeout().
--callback cassandra_connect_timeout()           -> timeout().
+-callback cassandra_max_restart_delay()         -> timeout_in_ms().
+-callback cassandra_connect_timeout()           -> timeout_in_ms().
 -callback cassandra_max_sessions()              -> max_sessions().
 -callback cassandra_max_checkout_retry()        -> max_retries().
 -callback cassandra_session_decay_probability() -> decay_prob().
@@ -102,6 +106,8 @@ all_config_atoms() ->
                        cassandra_hosts,
                        cassandra_lb_queue,
                        cassandra_session_queue,
+                       cassandra_requests_queue,
+                       cassandra_request_reply_timeout,
                        cassandra_max_sessions,
                        cassandra_max_restart_delay,
                        cassandra_connect_timeout,
@@ -131,15 +137,18 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
--spec make_vbisect_config(lb_queue_name(), session_queue_name(), host_list(), timeout(), timeout(),
+-spec make_vbisect_config(lb_queue_name(), session_queue_name(), requests_queue_name(),
+                          timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(),
                           max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
-make_vbisect_config(Lb_Queue_Name, Queue_Name, [{_Ip, _Port} | _] = Host_List,
+make_vbisect_config(Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
+                    Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Timeout_Millis, Restart_Millis, Max_Sessions, Max_Retries, Decay_Prob)
- when is_atom(Lb_Queue_Name),     is_atom(Queue_Name),
+ when is_atom(Lb_Queue_Name),     is_atom(Queue_Name),  is_atom(Requests_Queue_Name),
+      is_integer(Request_Reply_Timeout), Request_Reply_Timeout > 0,
       is_list(_Ip), is_integer(_Port), _Port > 0,
       is_integer(Timeout_Millis), Timeout_Millis > 0,
       is_integer(Restart_Millis), Restart_Millis > 0,
@@ -148,8 +157,10 @@ make_vbisect_config(Lb_Queue_Name, Queue_Name, [{_Ip, _Port} | _] = Host_List,
       is_integer(Decay_Prob),     Decay_Prob    >= 0, Decay_Prob =< 1000000 ->
 
     Props = [
-             {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name, utf8)},
-             {<<"cassandra_session_queue">>,              atom_to_binary    (Queue_Name,    utf8)},
+             {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,       utf8)},
+             {<<"cassandra_session_queue">>,              atom_to_binary    (Queue_Name,          utf8)},
+             {<<"cassandra_requests_queue">>,             atom_to_binary    (Requests_Queue_Name, utf8)},
+             {<<"cassandra_request_reply_timeout">>,      integer_to_binary (Request_Reply_Timeout)},
              {<<"cassandra_hosts">>,                      term_to_binary    (Host_List)},
              {<<"cassandra_max_sessions">>,               integer_to_binary (Max_Sessions)},
              {<<"cassandra_max_restart_delay">>,          integer_to_binary (Restart_Millis)},
@@ -171,13 +182,25 @@ make_vbisect_config(Lb_Queue_Name, Queue_Name, [{_Ip, _Port} | _] = Host_List,
 %% @doc Get the configured name of the round-robin load balancer queue.
 load_balancer_queue ({config_mod,  Config_Module}) -> Config_Module:cassandra_lb_queue();
 load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
-                                                     binary_to_atom(Bin_Value, utf8).
+                                                      binary_to_atom(Bin_Value, utf8).
 
 -spec session_queue_name (config_type()) -> session_queue_name().
 %% @doc Get the configured name of the live session queue.
-session_queue_name ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_queue();
-session_queue_name ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
-                                                     binary_to_atom(Bin_Value, utf8).
+session_queue_name  ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_queue();
+session_queue_name  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
+                                                      binary_to_atom(Bin_Value, utf8).
+
+-spec requests_queue_name (config_type()) -> session_queue_name().
+%% @doc Get the configured name of the pending requests queue.
+requests_queue_name ({config_mod,  Config_Module}) -> Config_Module:cassandra_requests_queue();
+requests_queue_name ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_requests_queue">>, Bindict),
+                                                      binary_to_atom(Bin_Value, utf8).
+
+-spec request_reply_timeout  (config_type()) -> timeout_in_ms().
+%% @doc Get the time allowed for a pending query request to wait for a session before giving up.
+request_reply_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_request_reply_timeout();
+request_reply_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_reply_timeout">>, Bindict),
+                                                     binary_to_integer(Bin_Value).
 
 -spec round_robin_hosts  (config_type()) -> host_list().
 %% @doc Get the configured set of cassandra nodes to contact.
@@ -185,7 +208,7 @@ round_robin_hosts  ({config_mod,  Config_Module}) -> Config_Module:cassandra_hos
 round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_hosts">>, Bindict),
                                                      binary_to_term(Bin_Value).
 
--spec max_restart_delay  (config_type()) -> timeout().
+-spec max_restart_delay  (config_type()) -> timeout_in_ms().
 %% @doc
 %%   Get the maximum random delay on connection startup. This number of
 %%   milliseconds times the max_sessions should not exceed the supervisor
@@ -196,7 +219,7 @@ max_restart_delay    ({config_mod,  Config_Module}) -> Config_Module:cassandra_m
 max_restart_delay    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
                                                      binary_to_term(Bin_Value).
 
--spec connect_timeout  (config_type()) -> timeout().
+-spec connect_timeout  (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for a cassandra connection before giving up.
 connect_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_connect_timeout();
 connect_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connect_timeout">>, Bindict),
