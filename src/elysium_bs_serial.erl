@@ -95,7 +95,12 @@ checkin_connection(Config, Session_Id)
         true  -> checkin_pending   (Config, Session_Id, Pending_Queue)
     end.
 
--spec pend_request(config_type(), query_request()) -> any() | ets_buffer:buffer_error().
+-spec pend_request(config_type(), query_request()) -> any()
+                                                          | ets_buffer:buffer_error()
+                                                          | {wait_for_session_timeout, pos_integer()}
+                                                          | {worker_reply_timeout,     pos_integer()}
+                                                          | {wait_for_session_error,   any()}
+                                                          | {worker_reply_error,       any()}.
 %%   Block the caller while the request is serially queued. When
 %%   a session is avialable to run this pending request, the
 %%   blocking recieve loop will unblock and a spawned process
@@ -108,7 +113,7 @@ pend_request(Config, Query_Request) ->
     Pending_Queue = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
     Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-    wait_for_session(Pending_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout).
+    wait_for_session(Config, Pending_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout).
 
 
 %%%-----------------------------------------------------------------------
@@ -158,40 +163,55 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
     end.
 
 %% TODO: This receive loop needs to handle status queries and kill requests so it can be monitored.
-wait_for_session(_Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
+wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
         {sid, Sid_Reply_Ref, Session_Id, Pending_Queue} ->
+            Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case is_process_alive(Session_Id) of
-
-                %% Requeue and wait for another Session_Id (this request is delayed and out of serial order)
-                false -> _ = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-                         wait_for_session(_Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout);
-
-                %% Handle the pending request if it is not expired already.
-                true  -> case timer:now_diff(os:timestamp(), Start_Time) of
-                             Expired when Expired > Reply_Timeout * 1000 ->
-                                 {session_wait_timeout, Reply_Timeout};
-
-                             %% Use only the Remaining time for the actual query
-                             Remaining_Time ->
-                                 Self = self(),
-                                 Worker_Reply_Ref = make_ref(),
-                                 Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self,
-                                                                            Session_Id, Query_Request) end,
-                                 _ = spawn_opt(Worker_Fun, [monitor]),
-                                 Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
-                                 receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining)
-                         end
+                %% Just throw away the Session_Id...
+                false -> requeue_wait_for_session(Config, Pending_Queue, Pending_Request_Count,
+                                                  Sid_Reply_Ref, Start_Time, Query_Request,
+                                                  Reply_Timeout, Elapsed_Time);
+                %% Handle, but there may be no time left to run the query...
+                true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout, Session_Id, Query_Request)
             end;
-        Other -> error_logger:error_msg("Wait_for_session error: ~p", [Other])
+        %% There is only one message we are expecting...
+        Other           -> {wait_for_session_error,   Other}
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
+%% Requeue and wait for another Session_Id (this request is delayed and out of serial order)
+requeue_wait_for_session(_Config, _Pending_Queue, _Pending_Request_Count, _Sid_Reply_Ref,
+                         _Start_Time, _Query_Request, Reply_Timeout, Elapsed_Time)
+  when Elapsed_Time >= Reply_Timeout * 1000 ->
+    {wait_for_session_timeout, Reply_Timeout};
+requeue_wait_for_session(Config, Pending_Queue, Pending_Request_Count, Sid_Reply_Ref,
+                         Start_Time, Query_Request, Reply_Timeout, Elapsed_Time) ->
+    New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
+    _ = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
+    wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout).
+
+%% Use the Session_Id to run the query if we aren't out of time
+handle_pending_request( Config, Expired, Reply_Timeout, Session_Id, _Query_Request)
+  when Expired >= Reply_Timeout * 1000 ->
+    %% Not tail recursive, but it should return quickly after asynch messaging.
+    _ = checkin_connection(Config, Session_Id),
+    {wait_for_session_timeout, Reply_Timeout};
+handle_pending_request(_Config, Remaining_Time, Reply_Timeout, Session_Id, Query_Request) ->
+    Self = self(),
+    Worker_Reply_Ref = make_ref(),
+    %% Avoiding export of exec_pending_request/4
+    Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Session_Id, Query_Request) end,
+    _ = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
+    Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
+    receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining).
+
 %% TODO: This receive loop needs to handle status queries and kill requests so it can be monitored.
 receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining) ->
-    receive {wrr, Worker_Reply_Ref, Reply} -> Reply;
-            {'DOWN', _Ref, process, _Pid, Reason} -> error_logger:error_msg("Worker Reply DOWN: ~p", [Reason])
-    after   Timeout_Remaining -> {worker_reply_timeout, Timeout_Remaining}
+    receive
+        {wrr, Worker_Reply_Ref, Reply}        -> Reply;
+        {'DOWN', _Ref, process, _Pid, Reason} -> {worker_reply_error,   Reason}
+    after Timeout_Remaining                   -> {worker_reply_timeout, Timeout_Remaining}
     end.
 
 -spec checkin_immediate(config_type(), pid())
@@ -215,8 +235,7 @@ receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining) ->
 %%   function should be a hotspot and we don't want it to slow
 %%   down or become a concurrency bottleneck.
 %% @end
-checkin_immediate(Config, Session_Id)
-  when is_pid(Session_Id) ->
+checkin_immediate(Config, Session_Id) ->
     Queue_Name   = elysium_config:session_queue_name (Config),
     Max_Sessions = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
