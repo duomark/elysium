@@ -9,3 +9,13 @@
 -type max_sessions()        :: pos_integer().
 -type max_retries()         :: non_neg_integer().
 -type decay_prob()          :: non_neg_integer().  %% number of chances in 1M of death
+
+-type wait_for_session_error() :: {wait_for_session_timeout, pos_integer()}
+                                | {wait_for_session_error,   any()}.
+
+-type worker_reply_error()     :: {worker_reply_timeout,     pos_integer()}
+                                | {worker_reply_error,       any()}.
+
+-type pend_request_error()     :: ets_buffer:buffer_error()
+                                | wait_for_session_error()
+                                | worker_reply_error().

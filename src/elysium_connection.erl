@@ -156,7 +156,15 @@ with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
 
 buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
 buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
-    elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}).
+    case elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}) of
+        {missing_ets_data,         _MED} = Err1 -> report_error(?MODULE, buffer_bare_fun_call, Err1, Args);
+        {missing_ets_buffer,       _MEB} = Err2 -> report_error(?MODULE, buffer_bare_fun_call, Err2, Args);
+        {wait_for_session_error,   _WSE} = Err3 -> report_error(?MODULE, buffer_bare_fun_call, Err3, Args);
+        {wait_for_session_timeout, _WST} = Err4 -> report_error(?MODULE, buffer_bare_fun_call, Err4, Args);
+        {worker_reply_error,       _WRE} = Err5 -> report_error(?MODULE, buffer_bare_fun_call, Err5, Args);
+        {worker_reply_timeout,     _WRT} = Err6 -> report_error(?MODULE, buffer_bare_fun_call, Err6, Args);
+        Reply -> Reply
+    end.
 
 
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
@@ -179,4 +187,17 @@ with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
 
 buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
 buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, serial) ->
-    elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}).
+    case elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}) of
+        {missing_ets_data,         _MED} = Err1 -> report_error(Mod, Fun, Err1, Args);
+        {missing_ets_buffer,       _MEB} = Err2 -> report_error(Mod, Fun, Err2, Args);
+        {wait_for_session_error,   _WSE} = Err3 -> report_error(Mod, Fun, Err3, Args);
+        {wait_for_session_timeout, _WST} = Err4 -> report_error(Mod, Fun, Err4, Args);
+        {worker_reply_error,       _WRE} = Err5 -> report_error(Mod, Fun, Err5, Args);
+        {worker_reply_timeout,     _WRT} = Err6 -> report_error(Mod, Fun, Err6, Args);
+        Reply -> Reply
+    end.
+
+
+report_error(Module, Function, Error, Args) ->
+    lager:error("~p:~p got ~p with ~p~n", [Module, Function, Error, Args]),
+    Error.

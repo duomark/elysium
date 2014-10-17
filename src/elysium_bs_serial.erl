@@ -96,12 +96,7 @@ checkin_connection(Config, {_Ip, _Port} = Node, Session_Id)
         true  -> checkin_pending   (Config, Node, Session_Id, Pending_Queue)
     end.
 
--spec pend_request(config_type(), query_request()) -> any()
-                                                          | ets_buffer:buffer_error()
-                                                          | {wait_for_session_timeout, pos_integer()}
-                                                          | {worker_reply_timeout,     pos_integer()}
-                                                          | {wait_for_session_error,   any()}
-                                                          | {worker_reply_error,       any()}.
+-spec pend_request(config_type(), query_request()) -> any() | pend_request_error().
 %%   Block the caller while the request is serially queued. When
 %%   a session is avialable to run this pending request, the
 %%   blocking recieve loop will unblock and a spawned process
@@ -281,8 +276,11 @@ checkin_pending(Config, Node, Sid, Pending_Queue) ->
                 Expired when Expired > Reply_Timeout * 1000 ->
                     checkin_connection(Config, Node, Sid);
                 _Remaining_Time ->
-                    Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue},
-                    delay_checkin(Config)
+                    case is_process_alive(Pid) of
+                        false -> checkin_connection(Config, Node, Sid);
+                        true  -> Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue},
+                                 delay_checkin(Config)
+                    end
             end
     end.
 
