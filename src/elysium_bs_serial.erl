@@ -43,7 +43,8 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--type resource_counts() :: {atom(), non_neg_integer(), non_neg_integer()}.
+-type resource_counts() :: {idle_connections | pending_requests,
+                            {atom(), non_neg_integer(), non_neg_integer()}}.
 -spec status(config_type()) -> {status, [resource_counts()]}.
 %% @doc Get the current queue size of the pending queue.
 status(Config) ->
@@ -124,13 +125,13 @@ idle_connections(Config) ->
     Queue_Name   = elysium_config:session_queue_name (Config),
     Max_Sessions = elysium_config:session_max_count  (Config),
     Buffer_Count = ets_buffer:num_entries_dedicated (Queue_Name),
-    report_available_resources(Queue_Name, Buffer_Count, Max_Sessions).
+    {idle_connections, report_available_resources(Queue_Name, Buffer_Count, Max_Sessions)}.
     
 pending_requests(Config) ->
     Queue_Name    = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
     Pending_Count = ets_buffer:num_entries_dedicated (Queue_Name),
-    report_available_resources(Queue_Name, Pending_Count, Reply_Timeout).
+    {pending_requests, report_available_resources(Queue_Name, Pending_Count, Reply_Timeout)}.
 
 report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
     {Queue_Name, {missing_ets_buffer, 0, Max}};
