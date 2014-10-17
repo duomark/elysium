@@ -112,22 +112,10 @@ enable() ->
 %%   Create the connection queue and initialize the internal state.
 %% @end        
 init({Config}) ->
-    %% Setup a load balancing FIFO Queue for all the Cassandra nodes to contact.
-    Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
-    Lb_Queue_Name = ets_buffer:create_dedicated(Lb_Queue_Name, fifo),
-    _ = [ets_buffer:write_dedicated(Lb_Queue_Name, Node)
-         || {_Ip, _Port} = Node <- elysium_config:round_robin_hosts(Config),
-            is_list(_Ip), is_integer(_Port), _Port > 0],
-
-    %% Create a FIFO Queue for the live sessions that are connected to Cassandra.
-    Session_Queue_Name = elysium_config:session_queue_name(Config),
-    Session_Queue_Name = ets_buffer:create_dedicated(Session_Queue_Name, fifo),
-
-    %% Create a FIFO Queue for pending query requests.
-    Pending_Queue_Name = elysium_config:requests_queue_name(Config),
-    Pending_Queue_Name = ets_buffer:create_dedicated(Pending_Queue_Name, fifo),
-
     %% Setup the internal state to be able to reference the queues.
+    Lb_Queue_Name      = elysium_config:load_balancer_queue (Config),
+    Session_Queue_Name = elysium_config:session_queue_name  (Config),
+    Pending_Queue_Name = elysium_config:requests_queue_name (Config),
     State = #ef_state{
                config          = Config,
                available_hosts = Lb_Queue_Name,
@@ -159,11 +147,6 @@ terminate(Reason, _State_Name,
                 [elysium_connection:stop(Sid) || Sid <- Sessions];
             _Error -> done
         end,
-
-    %% Can't do anything about checked out sessions
-    %% (maybe we should keep a checked out ets table?)
-    _ = ets_buffer:delete_dedicated(Session_Queue_Name),
-    _ = ets_buffer:delete_dedicated(Lb_Queue_Name),
     ok.
 
 
@@ -277,7 +260,7 @@ handle_sync_event({register_connection_supervisor, _Connection_Sup} = Event, _Fr
 
 handle_sync_event(current_state, _From, ?active,        #ef_state{} = State) -> {reply, active,        ?active,        State};
 handle_sync_event(current_state, _From, ?disabled,      #ef_state{} = State) -> {reply, disabled,      ?disabled,      State};
-handle_sync_event(current_state, _From, ?inactive,      #ef_state{} = State) -> {reply, active,        ?active,        State};
+handle_sync_event(current_state, _From, ?inactive,      #ef_state{} = State) -> {reply, active,        ?inactive,      State};
 handle_sync_event(current_state, _From, ?wait_register, #ef_state{} = State) -> {reply, wait_register, ?wait_register, State}.
 
 
