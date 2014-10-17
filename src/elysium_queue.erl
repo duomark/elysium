@@ -5,23 +5,11 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Elysium_fsm is a gen_fsm that owns a FIFO queue of available
-%%%   Cassandra hosts and a FIFO queue of pre-allocated Cassandra
-%%%   sessions. This FSM is started before any of the Cassandra
-%%%   connections so that the ets_buffer queues can be owned by
-%%%   a process which is less volatile than the individual connections.
-%%%   A containing application can crash a connection without disrupting
-%%%   other connections, nor disrupting the smooth flow of connection
-%%%   checkin / checkout.
-%%%
-%%%   To further support fault tolerance and load balancing, the configuration
-%%%   data identifies a list of Cassandra hosts to which live sessions
-%%%   may be established. The list of hosts is kept in a queue so that
-%%%   every attempt to connect or reconnect is a round-robin request against
-%%%   a different host, skipping any that cannot successfully accept a new
-%%%   connection request. Coupled with stochastic decay of existing connections
-%%%   the active sessions will automatically adapt to the spontaneous
-%%%   availability of Cassandra cluster client nodes for transactions.
+%%%   Elysium_fsm is a gen_fsm that handles client queries about the
+%%%   state of the session, pending_requests and load balancing
+%%%   ets_buffer queues. These queues are owned by elysium_buffer_sup
+%%%   but are queried by elysium_queue so that there is no risk of
+%%%   a query crashing the owner of an ets table.
 %%%
 %%%   There currently may only be one elysium_queue per application
 %%%   because it is a registered name and there is only one worker
@@ -86,7 +74,7 @@
 %%%-----------------------------------------------------------------------
 
 -spec start_link(config_type()) -> {ok, pid()}.
-%% @doc Create an ets_buffer dedicated FIFO queue using the configured queue name.
+%% @doc Create an ets_buffer FIFO queue using the configured queue name.
 start_link(Config) ->
     true = elysium_config:is_valid_config(Config),
     gen_fsm:start_link({local, ?SERVER}, ?MODULE, {Config}, []).
@@ -95,7 +83,8 @@ start_link(Config) ->
 %% @doc Register the connection supervisor so that it can be manually controlled.
 register_connection_supervisor(Connection_Sup)
   when is_pid(Connection_Sup) ->
-    gen_fsm:sync_send_all_state_event(?SERVER, {register_connection_supervisor, Connection_Sup}).
+    Register_Cmd = {register_connection_supervisor, Connection_Sup},
+    gen_fsm:sync_send_all_state_event(?SERVER, Register_Cmd).
 
 -spec activate() -> Max_Allowed::max_sessions().
 %% @doc Change to the active state, creating new Cassandra sessions.
@@ -108,7 +97,7 @@ deactivate() ->
     gen_fsm:sync_send_event(?SERVER, deactivate).
 
 -spec enable() -> ok.
-%% @doc Change from disabled to the inactive state, allowing new Cassandra sessions to be created.
+%% @doc Change disabled to inactive state, allowing new session creation.
 enable() ->
     gen_fsm:sync_send_event(?SERVER, enable).
 
@@ -275,13 +264,12 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Register the connection supervisor; report the current state of the FSM.
 handle_sync_event({register_connection_supervisor, Connection_Sup}, _From,
-                  ?wait_register, #ef_state{connection_sup=undefined} = State)
+                  ?wait_register, #ef_state{connection_sup=undefined, config=Config} = State)
   when is_pid(Connection_Sup) ->
     New_State = State#ef_state{connection_sup=Connection_Sup},
-    case application:get_env(elysium) of
-        undefined     -> {reply, ok, ?disabled, New_State};
-        {ok, enabled} -> {reply, ok, ?inactive, New_State};
-        _Disabled     -> {reply, ok, ?disabled, New_State}
+    case elysium_config:is_elysium_config_enabled(Config) of
+        false -> {reply, ok, ?disabled, New_State};
+        true  -> {reply, ok, ?inactive, New_State}
     end;
 handle_sync_event({register_connection_supervisor, _Connection_Sup} = Event, _From, State_Name, #ef_state{} = State) ->
     error_logger:error_msg("Unexpected event ~p for state name ~p in state ~p~n", [Event, State_Name, State]),

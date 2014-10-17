@@ -3,16 +3,17 @@ Releases
 
  Vsn  |   Date     |   Desc
 ------|------------|----------
-[0.1.6](#0.1.6) | 2014/10/16 | Cleanup queue ownership and status interface
-[0.1.5](#0.1.5) | 2014/10/15 | Serial buffering of pending requests
-[0.1.4](#0.1.4) | 2014/09/30 | Allow enabled/disabled elysium_queue on startup
-[0.1.3](#0.1.3) | 2014/09/28 | Add consistency to all CQL requests
-[0.1.2](#0.1.2) | 2014/10/01 | Compiled config with round-robin load balancing
-[0.1.1](#0.1.1) | 2014/09/25 | Session decay
-[0.1.0](#0.1.0) | 2014/09/22 | Initial release
+[0.1.6](#0.1.6) | 2014/10/16 | [Cleanup queue ownership and status interface](#0.1.6)
+[0.1.5](#0.1.5) | 2014/10/15 | [Serial buffering of pending requests](#0.1.5)
+[0.1.4](#0.1.4) | 2014/10/06 | [Allow enabled/disabled elysium_queue on startup](#0.1.4)
+[0.1.3](#0.1.3) | 2014/10/02 | [Add consistency to all CQL requests](#0.1.3)
+[0.1.2](#0.1.2) | 2014/10/01 | [Compiled config with round-robin load balancing](#0.1.2)
+[0.1.1](#0.1.1) | 2014/09/25 | [Session decay](#0.1.1)
+[0.1.0](#0.1.0) | 2014/09/22 | [Initial release](#0.1.0)
 
 ### <a name="0.1.6"></a>0.1.6 Cleanup queue ownership and status interface
 
+    * Add elysium_config:is_elysium_config_enabled/1
     * Add elysium_buffer_sup to own session and pending request ets_buffers
     * Remove elysium_overload
 

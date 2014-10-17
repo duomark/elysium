@@ -17,6 +17,7 @@
 -author('jay@duomark.com').
 
 -export([
+         is_elysium_enabled/0,
          cassandra_lb_queue/0,
          cassandra_session_queue/0,
          cassandra_requests_queue/0,
@@ -32,6 +33,10 @@
 -behaviour(elysium_config).
 -include("elysium_types.hrl").
 
+-spec is_elysium_enabled() -> boolean().
+%% @doc Whether elysium is enabled.
+is_elysium_enabled() -> true.
+     
 -spec cassandra_lb_queue() -> lb_queue_name().
 %% @doc Using load balancer queue 'elysium_lb_queue'.
 cassandra_lb_queue() -> elysium_lb_queue.
