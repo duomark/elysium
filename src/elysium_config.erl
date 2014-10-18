@@ -67,8 +67,9 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/10,
+         make_vbisect_config/11,
 
+         is_elysium_config_enabled/1,
          load_balancer_queue/1,
          session_queue_name/1,
          requests_queue_name/1,
@@ -83,6 +84,7 @@
 
 -include("elysium_types.hrl").
 
+-callback is_elysium_enabled()                  -> boolean().
 -callback cassandra_lb_queue()                  -> lb_queue_name().
 -callback cassandra_session_queue()             -> session_queue_name().
 -callback cassandra_requests_queue()            -> requests_queue_name().
@@ -103,6 +105,7 @@
 %% @doc Get a list of all the configuration parameter keys as atoms.
 all_config_atoms() ->
     ordsets:from_list([
+                       is_elysium_enabled,
                        cassandra_hosts,
                        cassandra_lb_queue,
                        cassandra_session_queue,
@@ -137,14 +140,14 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
--spec make_vbisect_config(lb_queue_name(), session_queue_name(), requests_queue_name(),
+-spec make_vbisect_config(boolean(), lb_queue_name(), session_queue_name(), requests_queue_name(),
                           timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(),
                           max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
-make_vbisect_config(Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
+make_vbisect_config(Enabled, Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Timeout_Millis, Restart_Millis, Max_Sessions, Max_Retries, Decay_Prob)
  when is_atom(Lb_Queue_Name),     is_atom(Queue_Name),  is_atom(Requests_Queue_Name),
@@ -157,6 +160,7 @@ make_vbisect_config(Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
       is_integer(Decay_Prob),     Decay_Prob    >= 0, Decay_Prob =< 1000000 ->
 
     Props = [
+             {<<"is_elysium_enabled">>,                   boolean_to_binary(Enabled)},
              {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,       utf8)},
              {<<"cassandra_session_queue">>,              atom_to_binary    (Queue_Name,          utf8)},
              {<<"cassandra_requests_queue">>,             atom_to_binary    (Requests_Queue_Name, utf8)},
@@ -176,7 +180,12 @@ make_vbisect_config(Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
 %% as quickly as possible, therefore the raw accessors do not
 %% check for the validity of the parameters. These functions
 %% will crash if they are passed an invalid parameter.
-
+     
+-spec is_elysium_config_enabled (config_type()) -> boolean().
+%% @doc Determine if elysium is enabled.
+is_elysium_config_enabled ({config_mod,  Config_Module}) -> Config_Module:is_elysium_enabled();
+is_elysium_config_enabled ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"is_elysium_enabled">>, Bindict),
+                                                            binary_to_boolean(Bin_Value).
 
 -spec load_balancer_queue (config_type()) -> lb_queue_name().
 %% @doc Get the configured name of the round-robin load balancer queue.
@@ -243,3 +252,9 @@ decay_probability  ({config_mod,  Config_Module}) -> Config_Module:cassandra_ses
 decay_probability  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
+
+boolean_to_binary(true)    -> <<"1">>;
+boolean_to_binary(false)   -> <<"0">>.
+    
+binary_to_boolean(<<"1">>) -> true;
+binary_to_boolean(<<"0">>) -> false.
