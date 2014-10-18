@@ -6,8 +6,8 @@
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   Elysium_connection_sup supervises all Cassandra connections.
-%%%   Each connection is an instance of an elysium_connection (gen_fsm)
-%%%   which holds a live seestar_session to a Cassandra database.
+%%%   Each connection is an instance of a seestar_session (gen_server)
+%%%   which is used to execute requests against the Cassandra database.
 %%%
 %%% @since 0.1.0
 %%% @end

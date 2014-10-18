@@ -41,8 +41,7 @@
 -spec start_link(config_type()) -> {ok, pid()}.
 %% @doc
 %%   Start the root supervisor. This is the one that should be started
-%%   by any including supervisor. The config/sys.config provides a set
-%%   of example parameters that the including application should specify.
+%%   by any including supervisor.
 %% @end
 start_link(Config) ->
     supervisor:start_link({local, ?SUPER}, ?MODULE, {Config}).
@@ -60,13 +59,15 @@ start_link(Config) ->
 -spec init({config_type()}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                                      [supervisor:child_spec()]}}.
 %% @doc
-%%   Starts the gen_fsm which owns the Cassandra connection queue,
-%%   and one supervisor of all Cassandra node supervisors. They are
+%%   Starts the supervisor which owns the Cassandra connection queue,
+%%   followed by the gen_fsm which handles connnection queue status calls,
+%%   and one supervisor of all Cassandra node connections. They are
 %%   rest_for_one so that the queue is guaranteed to exist before
 %%   any connections are created.
 %% @end
 init({Config}) ->
     true        = elysium_config:is_valid_config (Config),
+    Buffer_Sup  = ?SUPER(elysium_buffer_sup,     [Config]),
     Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
     Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
-    {ok, {{rest_for_one, 10, 10}, [Queue_Proc, Conn_Sup]}}.
+    {ok, {{rest_for_one, 10, 10}, [Buffer_Sup, Queue_Proc, Conn_Sup]}}.
