@@ -68,21 +68,21 @@ init({Config}) ->
     %% Setup a load balancing FIFO Queue for all the Cassandra nodes to contact.
     Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
     Lb_Queue_Name = ets_buffer:create_dedicated(Lb_Queue_Name, fifo),
-    lager:error("Creating Cassandra round-robin ets_buffer '~p' with the following nodes:~n", [Lb_Queue_Name]),
+    lager:info("Creating Cassandra round-robin ets_buffer '~p' with the following nodes:~n", [Lb_Queue_Name]),
     _ = [begin
              _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node),
-             lager:error("   ~p~n", [Node])
+             lager:info("   ~p~n", [Node])
          end || {_Ip, _Port} = Node <- elysium_config:round_robin_hosts(Config),
                 is_list(_Ip), is_integer(_Port), _Port > 0],
 
     %% Create a FIFO Queue for the live sessions that are connected to Cassandra.
     Session_Queue_Name = elysium_config:session_queue_name(Config),
-    lager:error("Creating Cassandra session ets_buffer '~p'~n", [Session_Queue_Name]),
+    lager:info("Creating Cassandra session ets_buffer '~p'~n", [Session_Queue_Name]),
     Session_Queue_Name = ets_buffer:create_dedicated(Session_Queue_Name, fifo),
 
     %% Create a FIFO Queue for pending query requests.
     Pending_Queue_Name = elysium_config:requests_queue_name(Config),
-    lager:error("Creating Cassandra pending_requests ets_buffer '~p'~n", [Pending_Queue_Name]),
+    lager:info("Creating Cassandra pending_requests ets_buffer '~p'~n", [Pending_Queue_Name]),
     Pending_Queue_Name = ets_buffer:create_dedicated(Pending_Queue_Name, fifo),
     
     {ok, {{one_for_one, 1, 10}, []}}.
