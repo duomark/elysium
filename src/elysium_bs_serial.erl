@@ -238,7 +238,7 @@ checkin_immediate(Config, Node, Session_Id) ->
         false -> fail_checkin(Queue_Name, Max_Sessions);
         true  -> case decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
-                     true  -> exit(Session_Id, kill),
+                     true  -> decay_session(Config, Session_Id),
                               fail_checkin(Queue_Name, Max_Sessions)
                   end
     end.
@@ -266,6 +266,12 @@ decay_causes_death(Config, _Session_Id) ->
             R =< Probability
     end.
 
+decay_session(Config, Session_Id) ->
+    Supervisor_Pid = elysium_queue:get_connection_supervisor(),
+    try   _ = elysium_connection_sup:stop_child  (Supervisor_Pid, Session_Id)
+    after _ = elysium_connection_sup:start_child (Supervisor_Pid, [Config])
+    end.
+    
 checkin_pending(Config, Node, Sid, Pending_Queue) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
         [] -> checkin_immediate(Config, Node, Sid);
