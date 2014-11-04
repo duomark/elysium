@@ -25,6 +25,7 @@
          cassandra_hosts/0,
          cassandra_max_restart_delay/0,
          cassandra_connect_timeout/0,
+         cassandra_send_timeout/0,
          cassandra_max_sessions/0,
          cassandra_max_checkout_retry/0,
          cassandra_session_decay_probability/0
@@ -64,6 +65,10 @@ cassandra_max_restart_delay() -> 100.
 -spec cassandra_connect_timeout() -> timeout_in_ms().
 %% @doc Timeout after 50 milliseconds if a seestar session can't be established.
 cassandra_connect_timeout() -> 50.
+
+-spec cassandra_send_timeout() -> timeout_in_ms().
+%% @doc Timeout when sending requests to Cassandra.
+cassandra_send_timeout() -> 1000.
      
 -spec cassandra_max_sessions() -> max_sessions().
 %% @doc Allow a max of 16 simultaneous live Cassandra sessions.
