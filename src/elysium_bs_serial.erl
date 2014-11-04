@@ -158,9 +158,9 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
         Error -> Error
     end.
 
-%% TODO: This receive loop needs to handle status queries and kill requests so it can be monitored.
 wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
+        %% An elysium session channel is now available to make the request...
         {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue} ->
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case is_process_alive(Session_Id) of
@@ -171,9 +171,8 @@ wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query
                 %% Handle, but there may be no time left to run the query...
                 true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
                                                 Node, Session_Id, Query_Request)
-            end;
-        %% There is only one message we are expecting...
-        Other           -> {wait_for_session_error,   Other}
+            end
+        %% Any other messages are intended for the blocked caller, leave them in the message queue.
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
