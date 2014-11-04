@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   An elysium_connection is a seestar_session gen_server. A
+%%%   An elysium_connection is an elysium_channel gen_server. A
 %%%   connection to Cassandra is opened during the initialization.
 %%%   If this process ever crashes or ends, the connection is
 %%%   closed and a replacement process can optionally be spawned.
@@ -62,12 +62,12 @@
                                        | {error, {cassandra_not_available,
                                                   [node_attempt()]}}.
 %% @doc
-%%   Create a new seestar_session (a gen_server) and record its pid()
+%%   Create a new elysium_channel (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
 %%   connections to all who ask for them, assuming that they will return
 %%   the connection to the FIFO queue when they are done.
 %%
-%%   If a seestar_session fails, the elysium_connection_sup will start
+%%   If a elysium_channel fails, the elysium_connection_sup will start
 %%   a new session. This function will again enter the pid() into the
 %%   queue, replacing the crashed one that was removed from the queue
 %%   when it was allocated for work.
@@ -77,13 +77,13 @@ start_link(Config) ->
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
     Restart_Delay = elysium_config:max_restart_delay   (Config),
     ok = timer:sleep(elysium_random:random_int_up_to(Restart_Delay)),
-    start_session(Config, Lb_Queue_Name, Max_Retries, -1, []).
+    start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
-start_session(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
+start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
   when Times_Tried >= Max_Retries ->
     {error, {cassandra_not_available, Attempted_Connections}};
 
-start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
     case ets_buffer:read_dedicated(Lb_Queue_Name) of
 
         %% Give up if there are no connections available...
@@ -92,7 +92,7 @@ start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
         %% Race condition with another user, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         {missing_ets_data, Lb_Queue_Name, _} ->
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
 
         %% Attempt to connect to Cassandra node...
         [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
@@ -103,8 +103,12 @@ start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
     end.
 
 try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
-    Connect_Timeout = elysium_config:connect_timeout(Config),
-    try seestar_session:start_link(Ip, Port, [], [{connect_timeout, Connect_Timeout}]) of
+    Send_Timeout    = elysium_config:send_timeout    (Config),
+    Connect_Timeout = elysium_config:connect_timeout (Config),
+    try elysium_channel:start_link(Ip, Port,
+                                   [{send_timeout,       Send_Timeout}],
+                                   [{connect_timeout, Connect_Timeout}]) of
+
         {ok, Pid} = Session when is_pid(Pid) ->
             _ = elysium_bs_serial:checkin_connection(Config, Node, Pid),
             Session;
@@ -112,12 +116,12 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
         %% If we fail, try again after recording attempt.
         Error ->
             Node_Failure = {Node, Error},
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
     catch Error:Class ->
             Node_Failure = {Node, {Error, Class}},
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
             %% Ensure that we get the Node checked back in.
@@ -126,11 +130,11 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
 
 -spec stop(pid()) -> ok.
 %% @doc
-%%   Stop an existing seestar_session.
+%%   Stop an existing elysium_channel.
 %% @end
 stop(Session_Id)
   when is_pid(Session_Id) ->
-    seestar_session:stop(Session_Id).
+    elysium_channel:stop(Session_Id).
 
 
 -spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency, buffering())
@@ -140,7 +144,7 @@ stop(Session_Id)
                                           Consistency :: seestar:consistency(),
                                           Result      :: any().
 %% @doc
-%%   Obtain an active seestar_session and use it solely
+%%   Obtain an active elysium_channel and use it solely
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
@@ -170,7 +174,7 @@ buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
                      -> {error, no_db_connections} | any().
 %% @doc
-%%   Obtain an active seestar_session and use it solely
+%%   Obtain an active elysium_channel and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
