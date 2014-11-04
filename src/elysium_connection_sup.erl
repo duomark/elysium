@@ -69,6 +69,7 @@ start_child(Sup_Pid, [Config] = Args) ->
 stop_child(Sup_Pid, Child_Pid) ->
     supervisor:terminate_child(Sup_Pid, Child_Pid).
 
+
 %%%-----------------------------------------------------------------------
 %%% Internal API
 %%%-----------------------------------------------------------------------
