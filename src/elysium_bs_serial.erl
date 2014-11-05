@@ -158,9 +158,9 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
         Error -> Error
     end.
 
-%% TODO: This receive loop needs to handle status queries and kill requests so it can be monitored.
 wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
+        %% An elysium session channel is now available to make the request...
         {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue} ->
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case is_process_alive(Session_Id) of
@@ -171,9 +171,8 @@ wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query
                 %% Handle, but there may be no time left to run the query...
                 true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
                                                 Node, Session_Id, Query_Request)
-            end;
-        %% There is only one message we are expecting...
-        Other           -> {wait_for_session_error,   Other}
+            end
+        %% Any other messages are intended for the blocked caller, leave them in the message queue.
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
@@ -239,7 +238,7 @@ checkin_immediate(Config, Node, Session_Id) ->
         false -> fail_checkin(Queue_Name, Max_Sessions);
         true  -> case decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
-                     true  -> exit(Session_Id, kill),
+                     true  -> decay_session(Config, Session_Id),
                               fail_checkin(Queue_Name, Max_Sessions)
                   end
     end.
@@ -267,6 +266,12 @@ decay_causes_death(Config, _Session_Id) ->
             R =< Probability
     end.
 
+decay_session(Config, Session_Id) ->
+    Supervisor_Pid = elysium_queue:get_connection_supervisor(),
+    try   _ = elysium_connection_sup:stop_child  (Supervisor_Pid, Session_Id)
+    after _ = elysium_connection_sup:start_child (Supervisor_Pid, [Config])
+    end.
+    
 checkin_pending(Config, Node, Sid, Pending_Queue) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
         [] -> checkin_immediate(Config, Node, Sid);
@@ -291,12 +296,14 @@ checkin_pending(Config, Node, Sid, Pending_Queue) ->
 exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
     try   Reply = Query_Fun(Sid, Args, Consistency),
           Reply_Pid ! {wrr, Reply_Ref, Reply}
-    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p", [A,B, Reply_Pid, Args])
+    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p",
+                                        [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid)
     end;
 exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
     try   Reply = Mod:Fun(Sid, Args, Consistency),
           Reply_Pid ! {wrr, Reply_Ref, Reply}
-    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p", [A,B, Reply_Pid, Args])
+    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p",
+                                        [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid)
     end.

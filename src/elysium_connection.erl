@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   An elysium_connection is a seestar_session gen_server. A
+%%%   An elysium_connection is an seestar_session gen_server. A
 %%%   connection to Cassandra is opened during the initialization.
 %%%   If this process ever crashes or ends, the connection is
 %%%   closed and a replacement process can optionally be spawned.
@@ -77,13 +77,13 @@ start_link(Config) ->
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
     Restart_Delay = elysium_config:max_restart_delay   (Config),
     ok = timer:sleep(elysium_random:random_int_up_to(Restart_Delay)),
-    start_session(Config, Lb_Queue_Name, Max_Retries, -1, []).
+    start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
-start_session(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
+start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
   when Times_Tried >= Max_Retries ->
     {error, {cassandra_not_available, Attempted_Connections}};
 
-start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
+start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
     case ets_buffer:read_dedicated(Lb_Queue_Name) of
 
         %% Give up if there are no connections available...
@@ -92,7 +92,7 @@ start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
         %% Race condition with another user, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         {missing_ets_data, Lb_Queue_Name, _} ->
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
 
         %% Attempt to connect to Cassandra node...
         [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
@@ -103,8 +103,14 @@ start_session( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
     end.
 
 try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
-    Connect_Timeout = elysium_config:connect_timeout(Config),
-    try seestar_session:start_link(Ip, Port, [], [{connect_timeout, Connect_Timeout}]) of
+    %% Send_Timeout    = elysium_config:send_timeout    (Config),
+    Connect_Timeout = elysium_config:connect_timeout (Config),
+    try seestar_session:start_link(Ip, Port,
+                                   [
+                                    %% {send_timeout,       Send_Timeout}
+                                   ],
+                                   [{connect_timeout, Connect_Timeout}]) of
+
         {ok, Pid} = Session when is_pid(Pid) ->
             _ = elysium_bs_serial:checkin_connection(Config, Node, Pid),
             Session;
@@ -112,12 +118,12 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
         %% If we fail, try again after recording attempt.
         Error ->
             Node_Failure = {Node, Error},
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
     catch Error:Class ->
             Node_Failure = {Node, {Error, Class}},
-            start_session(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
+            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
             %% Ensure that we get the Node checked back in.
@@ -159,10 +165,9 @@ buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
     case elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}) of
         {missing_ets_data,         _MED} = Err1 -> report_error(?MODULE, buffer_bare_fun_call, Err1, Args);
         {missing_ets_buffer,       _MEB} = Err2 -> report_error(?MODULE, buffer_bare_fun_call, Err2, Args);
-        {wait_for_session_error,   _WSE} = Err3 -> report_error(?MODULE, buffer_bare_fun_call, Err3, Args);
-        {wait_for_session_timeout, _WST} = Err4 -> report_error(?MODULE, buffer_bare_fun_call, Err4, Args);
-        {worker_reply_error,       _WRE} = Err5 -> report_error(?MODULE, buffer_bare_fun_call, Err5, Args);
-        {worker_reply_timeout,     _WRT} = Err6 -> report_error(?MODULE, buffer_bare_fun_call, Err6, Args);
+        {wait_for_session_timeout, _WST} = Err3 -> report_error(?MODULE, buffer_bare_fun_call, Err3, Args);
+        {worker_reply_error,       _WRE} = Err4 -> report_error(?MODULE, buffer_bare_fun_call, Err4, Args);
+        {worker_reply_timeout,     _WRT} = Err5 -> report_error(?MODULE, buffer_bare_fun_call, Err5, Args);
         Reply -> Reply
     end.
 
@@ -190,10 +195,9 @@ buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, serial) ->
     case elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}) of
         {missing_ets_data,         _MED} = Err1 -> report_error(Mod, Fun, Err1, Args);
         {missing_ets_buffer,       _MEB} = Err2 -> report_error(Mod, Fun, Err2, Args);
-        {wait_for_session_error,   _WSE} = Err3 -> report_error(Mod, Fun, Err3, Args);
-        {wait_for_session_timeout, _WST} = Err4 -> report_error(Mod, Fun, Err4, Args);
-        {worker_reply_error,       _WRE} = Err5 -> report_error(Mod, Fun, Err5, Args);
-        {worker_reply_timeout,     _WRT} = Err6 -> report_error(Mod, Fun, Err6, Args);
+        {wait_for_session_timeout, _WST} = Err3 -> report_error(Mod, Fun, Err3, Args);
+        {worker_reply_error,       _WRE} = Err4 -> report_error(Mod, Fun, Err4, Args);
+        {worker_reply_timeout,     _WRT} = Err5 -> report_error(Mod, Fun, Err5, Args);
         Reply -> Reply
     end.
 

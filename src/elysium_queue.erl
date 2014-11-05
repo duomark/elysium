@@ -31,6 +31,7 @@
 -export([
          start_link/1,
          register_connection_supervisor/1,
+         get_connection_supervisor/0,
 
          activate/0,
          deactivate/0,
@@ -85,6 +86,11 @@ register_connection_supervisor(Connection_Sup)
   when is_pid(Connection_Sup) ->
     Register_Cmd = {register_connection_supervisor, Connection_Sup},
     gen_fsm:sync_send_all_state_event(?SERVER, Register_Cmd).
+
+-spec get_connection_supervisor() -> pid().
+%% @doc Get the registered connection supervisor.
+get_connection_supervisor() ->
+    gen_fsm:sync_send_all_state_event(?SERVER, get_connection_supervisor).
 
 -spec activate() -> Max_Allowed::max_sessions().
 %% @doc Change to the active state, creating new Cassandra sessions.
@@ -239,13 +245,21 @@ terminate(Reason, _State_Name,
 %%% Event callbacks
 %%%-----------------------------------------------------------------------
 
--spec handle_sync_event(current_state | {register_connection_supervisor, pid()},
-                        {pid(), reference()}, State_Name, State)
-                 -> {reply, fsm_state_name() | ok | {error, tuple()}, State_Name, State}
-                        when State_Name :: fsm_state_fun_name(),
-                             State      :: #ef_state{}.
+-type sync_from() :: {pid(), reference()}.
+-spec handle_sync_event(current_state, sync_from(), State_Name, State) ->
+                               {reply, fsm_state_name(), State_Name, State}
+                                   when State_Name :: fsm_state_fun_name(),
+                                        State      :: #ef_state{};
+                       (get_connection_supervisor, sync_from(), State_Name, State) ->
+                               {reply, pid(), State_Name, State}
+                                   when State_Name :: fsm_state_fun_name(),
+                                        State      :: #ef_state{};
+                       ({register_connection_supervisor, pid()}, sync_from(), ?wait_register, State)
+                       -> {reply, ok | {error, tuple()}, ?disabled | ?inactive, New_State}
+                              when State      :: #ef_state{},
+                                   New_State  :: #ef_state{}.
 %% @private
-%% @doc Register the connection supervisor; report the current state of the FSM.
+%% @doc Register or get the connection supervisor; report the current state of the FSM.
 handle_sync_event({register_connection_supervisor, Connection_Sup}, _From,
                   ?wait_register, #ef_state{connection_sup=undefined, config=Config} = State)
   when is_pid(Connection_Sup) ->
@@ -257,6 +271,9 @@ handle_sync_event({register_connection_supervisor, Connection_Sup}, _From,
 handle_sync_event({register_connection_supervisor, _Connection_Sup} = Event, _From, State_Name, #ef_state{} = State) ->
     error_logger:error_msg("Unexpected event ~p for state name ~p in state ~p~n", [Event, State_Name, State]),
     {reply, {error, {wrong_state, State_Name}}, State_Name, State};
+
+handle_sync_event(get_connection_supervisor, _From, State_Name, #ef_state{} = State) ->
+    {reply, State#ef_state.connection_sup, State_Name, State};
 
 handle_sync_event(current_state, _From, ?active,        #ef_state{} = State) -> {reply, active,        ?active,        State};
 handle_sync_event(current_state, _From, ?disabled,      #ef_state{} = State) -> {reply, disabled,      ?disabled,      State};

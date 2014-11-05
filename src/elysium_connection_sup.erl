@@ -20,7 +20,8 @@
 %% External API
 -export([
          start_link/0,
-         start_child/2
+         start_child/2,
+         stop_child/2
         ]).
 
 %% Internal exports
@@ -62,7 +63,12 @@ start_link() ->
 start_child(Sup_Pid, [Config] = Args) ->
     true = elysium_config:is_valid_config(Config),
     supervisor:start_child(Sup_Pid, Args).
-    
+
+-spec stop_child(pid(), pid()) -> ok.
+%% @doc Stop a Cassandra connection.
+stop_child(Sup_Pid, Child_Pid) ->
+    supervisor:terminate_child(Sup_Pid, Child_Pid).
+
 
 %%%-----------------------------------------------------------------------
 %%% Internal API
