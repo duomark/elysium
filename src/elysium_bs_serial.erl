@@ -279,9 +279,9 @@ decay_causes_death(Config, _Session_Id) ->
 
 decay_session(Config, Session_Id) ->
     Supervisor_Pid = elysium_queue:get_connection_supervisor(),
-    case elysium_connection_sup:stop_child  (Supervisor_Pid, Session_Id) of
+    case elysium_connection_sup:stop_child(Supervisor_Pid, Session_Id) of
         {error, not_found} -> dont_replace_child;
-        ok -> elysium_connection_sup:start_child (Supervisor_Pid, [Config])
+        ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
     end.
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
