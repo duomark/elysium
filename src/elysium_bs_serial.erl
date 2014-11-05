@@ -23,7 +23,7 @@
 
 %% External API
 -export([
-         checkin_connection/3,
+         checkin_connection/4,
          checkout_connection/1,
          pend_request/2,
          status/1
@@ -74,7 +74,8 @@ checkout_connection(Config) ->
     Max_Retries = elysium_config:checkout_max_retry (Config),
     fetch_pid_from_queue(Queue_Name, Max_Retries, -1).
 
--spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()}, Session_Id::pid())
+-spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
+                         Session_Id::pid(), Is_New_Connecton::boolean())
                         -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
                                when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
                                     Max_Count  :: max_sessions() | ets_buffer:buffer_error().
@@ -83,17 +84,18 @@ checkout_connection(Config) ->
 %%   A checkin will continue looping on the pending queue with
 %%   the chance for decay on each attempt. If it decays, any
 %%   newly spawned replacement is expected to check the pending
-%%   queue for outstanding requests.
+%%   queue for outstanding requests. Brand new connections are
+%%   not checked for decay before first use.
 %%
 %%   This function can loop forever if there are pending requests,
 %%   so it performs an asynchronous send_event.
 %% @end
-checkin_connection(Config, {_Ip, _Port} = Node, Session_Id)
+checkin_connection(Config, {_Ip, _Port} = Node, Session_Id, Is_New_Connection)
   when is_pid(Session_Id) ->
     Pending_Queue = elysium_config:requests_queue_name(Config),
     case is_process_alive(Session_Id) andalso ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
-        false -> checkin_immediate (Config, Node, Session_Id);
-        true  -> checkin_pending   (Config, Node, Session_Id, Pending_Queue)
+        false -> checkin_immediate (Config, Node, Session_Id, Is_New_Connection);
+        true  -> checkin_pending   (Config, Node, Session_Id, Pending_Queue, Is_New_Connection)
     end.
 
 -spec pend_request(config_type(), query_request()) -> any() | pend_request_error().
@@ -161,7 +163,7 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
 wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
         %% An elysium session channel is now available to make the request...
-        {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue} ->
+        {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case is_process_alive(Session_Id) of
                 %% Just throw away the Session_Id...
@@ -170,7 +172,7 @@ wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query
                                                   Reply_Timeout, Elapsed_Time);
                 %% Handle, but there may be no time left to run the query...
                 true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
-                                                Node, Session_Id, Query_Request)
+                                                Node, Session_Id, Query_Request, Is_New_Connection)
             end
         %% Any other messages are intended for the blocked caller, leave them in the message queue.
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
@@ -188,15 +190,16 @@ requeue_wait_for_session(Config, Pending_Queue, Pending_Request_Count, Sid_Reply
     wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout).
 
 %% Use the Session_Id to run the query if we aren't out of time
-handle_pending_request( Config, Expired, Reply_Timeout, Node, Session_Id, _Query_Request)
+handle_pending_request( Config, Expired, Reply_Timeout, Node, Session_Id, _Query_Request, Is_New_Connection)
   when Expired >= Reply_Timeout * 1000 ->
     %% Not tail call, but it should return quickly after asynch messaging.
-    _ = checkin_connection(Config, Node, Session_Id),
+    _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
     {wait_for_session_timeout, Reply_Timeout};
-handle_pending_request(_Config, Remaining_Time, Reply_Timeout, Node, Session_Id, Query_Request) ->
+handle_pending_request(_Config, Remaining_Time, Reply_Timeout, Node, Session_Id,
+                       Query_Request, _Is_New_Connection) ->
     Self = self(),
     Worker_Reply_Ref = make_ref(),
-    %% Avoiding export of exec_pending_request/4
+    %% Avoiding export of exec_pending_request/5
     Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Session_Id, Query_Request) end,
     _ = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
     Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
@@ -210,7 +213,8 @@ receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining) ->
     after Timeout_Remaining                   -> {worker_reply_timeout, Timeout_Remaining}
     end.
 
--spec checkin_immediate(config_type(), {Ip::string(), Port::pos_integer()}, Session_Id::pid())
+-spec checkin_immediate(config_type(), {Ip::string(), Port::pos_integer()},
+                        Session_Id::pid(), Is_New_Connection::boolean())
                        -> {boolean(), {session_queue_name(), Idle_Count, Max_Count}}
                               when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
                                    Max_Count  :: max_sessions() | ets_buffer:buffer_error().
@@ -231,14 +235,21 @@ receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining) ->
 %%   function should be a hotspot and we don't want it to slow
 %%   down or become a concurrency bottleneck.
 %% @end
-checkin_immediate(Config, Node, Session_Id) ->
+checkin_immediate(Config, Node, Session_Id,  true) ->
+    Queue_Name   = elysium_config:session_queue_name (Config),
+    Max_Sessions = elysium_config:session_max_count  (Config),
+    case is_process_alive(Session_Id) of
+        false -> fail_checkin(Queue_Name, Max_Sessions);
+        true  -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id})
+    end;
+checkin_immediate(Config, Node, Session_Id, false) ->
     Queue_Name   = elysium_config:session_queue_name (Config),
     Max_Sessions = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
         false -> fail_checkin(Queue_Name, Max_Sessions);
         true  -> case decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
-                     true  -> decay_session(Config, Session_Id),
+                     true  -> _ = decay_session(Config, Session_Id),
                               fail_checkin(Queue_Name, Max_Sessions)
                   end
     end.
@@ -268,22 +279,23 @@ decay_causes_death(Config, _Session_Id) ->
 
 decay_session(Config, Session_Id) ->
     Supervisor_Pid = elysium_queue:get_connection_supervisor(),
-    try   _ = elysium_connection_sup:stop_child  (Supervisor_Pid, Session_Id)
-    after _ = elysium_connection_sup:start_child (Supervisor_Pid, [Config])
+    case elysium_connection_sup:stop_child  (Supervisor_Pid, Session_Id) of
+        {error, not_found} -> dont_replace_child;
+        ok -> elysium_connection_sup:start_child (Supervisor_Pid, [Config])
     end.
-    
-checkin_pending(Config, Node, Sid, Pending_Queue) ->
+
+checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
-        [] -> checkin_immediate(Config, Node, Sid);
-        [{{Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
+        [] -> checkin_immediate(Config, Node, Sid, Is_New_Connection);
+        [{{Waiting_Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
             Reply_Timeout = elysium_config:request_reply_timeout(Config),
             case timer:now_diff(os:timestamp(), When_Originally_Queued) of
                 Expired when Expired > Reply_Timeout * 1000 ->
-                    checkin_connection(Config, Node, Sid);
+                    checkin_connection(Config, Node, Sid, Is_New_Connection);
                 _Remaining_Time ->
-                    case is_process_alive(Pid) of
-                        false -> checkin_connection(Config, Node, Sid);
-                        true  -> Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue},
+                    case is_process_alive(Waiting_Pid) of
+                        false -> checkin_connection(Config, Node, Sid, Is_New_Connection);
+                        true  -> Waiting_Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue, Is_New_Connection},
                                  delay_checkin(Config)
                     end
             end
@@ -298,12 +310,12 @@ exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {bare_fun, Config, Query_F
           Reply_Pid ! {wrr, Reply_Ref, Reply}
     catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p",
                                         [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
-    after _ = checkin_connection(Config, Node, Sid)
+    after _ = checkin_connection(Config, Node, Sid, false)
     end;
 exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
     try   Reply = Mod:Fun(Sid, Args, Consistency),
           Reply_Pid ! {wrr, Reply_Ref, Reply}
     catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p",
                                         [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
-    after _ = checkin_connection(Config, Node, Sid)
+    after _ = checkin_connection(Config, Node, Sid, false)
     end.
