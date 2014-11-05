@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   An elysium_connection is an elysium_channel gen_server. A
+%%%   An elysium_connection is an seestar_session gen_server. A
 %%%   connection to Cassandra is opened during the initialization.
 %%%   If this process ever crashes or ends, the connection is
 %%%   closed and a replacement process can optionally be spawned.
@@ -62,12 +62,12 @@
                                        | {error, {cassandra_not_available,
                                                   [node_attempt()]}}.
 %% @doc
-%%   Create a new elysium_channel (a gen_server) and record its pid()
+%%   Create a new seestar_session (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
 %%   connections to all who ask for them, assuming that they will return
 %%   the connection to the FIFO queue when they are done.
 %%
-%%   If a elysium_channel fails, the elysium_connection_sup will start
+%%   If a seestar_session fails, the elysium_connection_sup will start
 %%   a new session. This function will again enter the pid() into the
 %%   queue, replacing the crashed one that was removed from the queue
 %%   when it was allocated for work.
@@ -103,10 +103,12 @@ start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
     end.
 
 try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
-    Send_Timeout    = elysium_config:send_timeout    (Config),
+    %% Send_Timeout    = elysium_config:send_timeout    (Config),
     Connect_Timeout = elysium_config:connect_timeout (Config),
-    try elysium_channel:start_link(Ip, Port,
-                                   [{send_timeout,       Send_Timeout}],
+    try seestar_session:start_link(Ip, Port,
+                                   [
+                                    %% {send_timeout,       Send_Timeout}
+                                   ],
                                    [{connect_timeout, Connect_Timeout}]) of
 
         {ok, Pid} = Session when is_pid(Pid) ->
@@ -130,11 +132,11 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
 
 -spec stop(pid()) -> ok.
 %% @doc
-%%   Stop an existing elysium_channel.
+%%   Stop an existing seestar_session.
 %% @end
 stop(Session_Id)
   when is_pid(Session_Id) ->
-    elysium_channel:stop(Session_Id).
+    seestar_session:stop(Session_Id).
 
 
 -spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency, buffering())
@@ -144,7 +146,7 @@ stop(Session_Id)
                                           Consistency :: seestar:consistency(),
                                           Result      :: any().
 %% @doc
-%%   Obtain an active elysium_channel and use it solely
+%%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
@@ -173,7 +175,7 @@ buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
                      -> {error, no_db_connections} | any().
 %% @doc
-%%   Obtain an active elysium_channel and use it solely
+%%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
