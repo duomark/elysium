@@ -64,7 +64,7 @@ start_child(Sup_Pid, [Config] = Args) ->
     true = elysium_config:is_valid_config(Config),
     supervisor:start_child(Sup_Pid, Args).
 
--spec stop_child(pid(), pid()) -> ok.
+-spec stop_child(pid(), pid()) -> ok | {error, not_found}.
 %% @doc Stop a Cassandra connection.
 stop_child(Sup_Pid, Child_Pid) ->
     supervisor:terminate_child(Sup_Pid, Child_Pid).
