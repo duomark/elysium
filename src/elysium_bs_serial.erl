@@ -171,9 +171,7 @@ wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query
                 %% Handle, but there may be no time left to run the query...
                 true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
                                                 Node, Session_Id, Query_Request)
-            end;
-        %% There is only one message we are expecting...
-        Other           -> {wait_for_session_error,   Other}
+            end
     after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
