@@ -110,8 +110,7 @@ pend_request(Config, Query_Request) ->
     Start_Time    = os:timestamp(),
     Pending_Queue = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-    wait_for_session(Config, Pending_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout).
+    wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout).
 
 
 %%%-----------------------------------------------------------------------
@@ -162,49 +161,55 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
             Error
     end.
 
-wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
-    receive
-        %% An elysium session channel is now available to make the request...
-        {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
-            Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
-            case is_process_alive(Session_Id) of
-                %% Just throw away the Session_Id...
-                false -> requeue_wait_for_session(Config, Pending_Queue, Pending_Request_Count,
-                                                  Sid_Reply_Ref, Start_Time, Query_Request,
-                                                  Reply_Timeout, Elapsed_Time);
-                %% Handle, but there may be no time left to run the query...
-                true  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
-                                                Node, Session_Id, Query_Request, Is_New_Connection)
+wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
+    Queue_Name = elysium_config:requests_queue_name(Config),
+    case fetch_pid_from_queue(Queue_Name, 1, 0) of
+
+        %% A free connection showed up since we first checked...
+        {Node, Session_Id} ->
+            handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
+
+        %% None are still available, queue the request and wait for one to free up.
+        _None_Available ->
+            _Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
+            receive
+
+                %% A live elysium session channel is now available to make the request...
+                {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
+
+                    Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
+                    case {Elapsed_Time >= Reply_Timeout * 1000, is_process_alive(Session_Id)} of
+
+                        %% Alas, we timed out waiting...
+                        {true,  true}  -> _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
+                                          {wait_for_session_timeout, Reply_Timeout};
+                        {true,  false} -> {wait_for_session_timeout, Reply_Timeout};
+
+                        %% Dead session, loop waiting for another (hopefully live) connection to free up...
+                        {false, false} -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
+                                          wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
+                                                           Start_Time, Query_Request, New_Timeout);
+
+                        %% Get some results while we still have time!
+                        {false, true}  -> handle_pending_request(Elapsed_Time, Reply_Timeout,
+                                                                 Node, Session_Id, Query_Request)
+                    end
+
+                %% Any other messages are intended for the blocked caller, leave them in the message queue.
+
+            after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
             end
-        %% Any other messages are intended for the blocked caller, leave them in the message queue.
-    after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
-%% Requeue and wait for another Session_Id (this request is delayed and out of serial order)
-requeue_wait_for_session(_Config, _Pending_Queue, _Pending_Request_Count, _Sid_Reply_Ref,
-                         _Start_Time, _Query_Request, Reply_Timeout, Elapsed_Time)
-  when Elapsed_Time >= Reply_Timeout * 1000 ->
-    {wait_for_session_timeout, Reply_Timeout};
-requeue_wait_for_session(Config, Pending_Queue, Pending_Request_Count, Sid_Reply_Ref,
-                         Start_Time, Query_Request, Reply_Timeout, Elapsed_Time) ->
-    New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
-    _ = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-    wait_for_session(Config, Pending_Request_Count, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout).
-
 %% Use the Session_Id to run the query if we aren't out of time
-handle_pending_request( Config, Expired, Reply_Timeout, Node, Session_Id, _Query_Request, Is_New_Connection)
-  when Expired >= Reply_Timeout * 1000 ->
-    %% Not tail call, but it should return quickly after asynch messaging.
-    _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
-    {wait_for_session_timeout, Reply_Timeout};
-handle_pending_request(_Config, Remaining_Time, Reply_Timeout, Node, Session_Id,
-                       Query_Request, _Is_New_Connection) ->
+handle_pending_request(Elapsed_Time, Reply_Timeout, Node, Session_Id, Query_Request) ->
+    %% Self cannot be executed inside the fun(), it needs to be set in the current context.
     Self = self(),
     Worker_Reply_Ref = make_ref(),
     %% Avoiding export of exec_pending_request/5
     Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Session_Id, Query_Request) end,
     {Worker_Pid, Worker_Monitor_Ref} = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
-    Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
+    Timeout_Remaining = Reply_Timeout - (Elapsed_Time div 1000),
     try   receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
     after erlang:demonitor(Worker_Monitor_Ref, [flush])
     end.
