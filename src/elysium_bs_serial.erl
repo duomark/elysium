@@ -75,7 +75,7 @@ checkout_connection(Config) ->
     fetch_pid_from_queue(Queue_Name, Max_Retries, -1).
 
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
-                         Session_Id::pid(), Is_New_Connecton::boolean())
+                         Session_Id::pid(), Is_New_Connection::boolean())
                         -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
                                when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
                                     Max_Count  :: max_sessions() | ets_buffer:buffer_error().
@@ -124,10 +124,10 @@ idle_connections(Config) ->
     {idle_connections, report_available_resources(Queue_Name, Buffer_Count, Max_Sessions)}.
     
 pending_requests(Config) ->
-    Queue_Name    = elysium_config:requests_queue_name   (Config),
+    Pending_Queue = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    Pending_Count = ets_buffer:num_entries_dedicated (Queue_Name),
-    {pending_requests, report_available_resources(Queue_Name, Pending_Count, Reply_Timeout)}.
+    Pending_Count = ets_buffer:num_entries_dedicated (Pending_Queue),
+    {pending_requests, report_available_resources(Pending_Queue, Pending_Count, Reply_Timeout)}.
 
 report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
     {Queue_Name, {missing_ets_buffer, 0, Max}};
@@ -157,12 +157,12 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
 
         %% Somehow the connection buffer died, or something even worse!
         Error ->
-            lager:error_msg("Connecton buffer error: ~p~n", [Error]),
+            lager:error("Connection buffer error: ~9999p~n", [Error]),
             Error
     end.
 
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
-    Queue_Name = elysium_config:requests_queue_name(Config),
+    Queue_Name = elysium_config:session_queue_name(Config),
     case fetch_pid_from_queue(Queue_Name, 1, 0) of
 
         %% A free connection showed up since we first checked...
