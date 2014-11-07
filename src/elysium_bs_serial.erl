@@ -205,18 +205,17 @@ handle_pending_request(_Config, Remaining_Time, Reply_Timeout, Node, Session_Id,
     Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Session_Id, Query_Request) end,
     {Worker_Pid, Worker_Monitor_Ref} = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
     Timeout_Remaining = Reply_Timeout - (Remaining_Time div 1000),
-    receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref).
+    try   receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
+    after erlang:demonitor(Worker_Monitor_Ref, [flush])
+    end.
 
 %% Worker_Pid is passed to allow tracing
 receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref) ->
-    Worker_Reply
-        = receive
-              {wrr, Worker_Reply_Ref, Reply}                            -> Reply;
-              {'DOWN', Worker_Monitor_Ref, process, Worker_Pid, Reason} -> {worker_reply_error, Reason}
-          after Timeout_Remaining                          -> {worker_reply_timeout, Timeout_Remaining}
-          end,
-    erlang:demonitor(Worker_Monitor_Ref, [flush]),
-    Worker_Reply.
+    receive
+        {wrr, Worker_Reply_Ref, Reply}                            -> Reply;
+        {'DOWN', Worker_Monitor_Ref, process, Worker_Pid, Reason} -> {worker_reply_error, Reason}
+    after Timeout_Remaining                          -> {worker_reply_timeout, Timeout_Remaining}
+    end.
 
 -spec checkin_immediate(config_type(), {Ip::string(), Port::pos_integer()},
                         Session_Id::pid(), Pending_Queue::requests_queue_name(), Is_New_Connection::boolean())
