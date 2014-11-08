@@ -67,7 +67,7 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/11,
+         make_vbisect_config/12,
 
          is_elysium_config_enabled/1,
          load_balancer_queue/1,
@@ -77,6 +77,7 @@
          round_robin_hosts/1,
          max_restart_delay/1,
          connect_timeout/1,
+         send_timeout/1,
          session_max_count/1,
          checkout_max_retry/1,
          decay_probability/1
@@ -92,6 +93,7 @@
 -callback cassandra_hosts()                     -> host_list().
 -callback cassandra_max_restart_delay()         -> timeout_in_ms().
 -callback cassandra_connect_timeout()           -> timeout_in_ms().
+-callback cassandra_send_timeout()              -> timeout_in_ms().
 -callback cassandra_max_sessions()              -> max_sessions().
 -callback cassandra_max_checkout_retry()        -> max_retries().
 -callback cassandra_session_decay_probability() -> decay_prob().
@@ -141,7 +143,7 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
 
 
 -spec make_vbisect_config(boolean(), lb_queue_name(), session_queue_name(), requests_queue_name(),
-                          timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(),
+                          timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(), timeout_in_ms(),
                           max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
@@ -149,11 +151,13 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
 %% @end
 make_vbisect_config(Enabled, Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
-                    Timeout_Millis, Restart_Millis, Max_Sessions, Max_Retries, Decay_Prob)
+                    Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
+                    Max_Sessions, Max_Retries, Decay_Prob)
  when is_atom(Lb_Queue_Name),     is_atom(Queue_Name),  is_atom(Requests_Queue_Name),
       is_integer(Request_Reply_Timeout), Request_Reply_Timeout > 0,
       is_list(_Ip), is_integer(_Port), _Port > 0,
-      is_integer(Timeout_Millis), Timeout_Millis > 0,
+      is_integer(Connect_Timeout_Millis), Connect_Timeout_Millis > 0,
+      is_integer(Send_Timeout_Millis),    Send_Timeout_Millis > 0,
       is_integer(Restart_Millis), Restart_Millis > 0,
       is_integer(Max_Sessions),   Max_Sessions   > 0,
       is_integer(Max_Retries),    Max_Retries   >= 0,
@@ -168,7 +172,8 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
              {<<"cassandra_hosts">>,                      term_to_binary    (Host_List)},
              {<<"cassandra_max_sessions">>,               integer_to_binary (Max_Sessions)},
              {<<"cassandra_max_restart_delay">>,          integer_to_binary (Restart_Millis)},
-             {<<"cassandra_connect_timeout">>,            integer_to_binary (Timeout_Millis)},
+             {<<"cassandra_connect_timeout">>,            integer_to_binary (Connect_Timeout_Millis)},
+             {<<"cassandra_send_timeout">>,               integer_to_binary (Send_Timeout_Millis)},
              {<<"cassandra_max_checkout_retry">>,         integer_to_binary (Max_Retries)},
              {<<"cassandra_session_decay_probability">>,  integer_to_binary (Decay_Prob)}
             ],
@@ -232,6 +237,12 @@ max_restart_delay    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect
 %% @doc Get the time allowed for a cassandra connection before giving up.
 connect_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_connect_timeout();
 connect_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connect_timeout">>, Bindict),
+                                                     binary_to_term(Bin_Value).
+
+-spec send_timeout      (config_type()) -> timeout_in_ms().
+%% @doc Get the time allowed for sending a request to cassandra before giving up.
+send_timeout       ({config_mod,  Config_Module}) -> Config_Module:cassandra_send_timeout();
+send_timeout       ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_send_timeout">>, Bindict),
                                                      binary_to_term(Bin_Value).
 
 -spec session_max_count  (config_type()) -> max_sessions().
