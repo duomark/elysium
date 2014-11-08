@@ -301,19 +301,39 @@ decay_session(Config, Session_Id) ->
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
+
+        %% There are no pending requests, return the session...
         [] -> checkin_immediate(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+
+        %% Race condition with pend_request, try again...
+        %% (Internally, ets_buffer calls erlang:yield() when this happens)
+        %% (It is presumed that repeated calling will eventually yield something even [])
+        {missing_ets_data, Pending_Queue, _} ->
+            checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+
+        %% Got a pending request, let's run it...
         [{{Waiting_Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
+
             Reply_Timeout = elysium_config:request_reply_timeout(Config),
             case timer:now_diff(os:timestamp(), When_Originally_Queued) of
+
+                %% Too much time has passed, skip this request and try another...
                 Expired when Expired > Reply_Timeout * 1000 ->
                     checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+
+                %% There's still time to reply, run the request if the session is still alive.
                 _Remaining_Time ->
                     case is_process_alive(Waiting_Pid) of
                         false -> checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
                         true  -> Waiting_Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue, Is_New_Connection},
                                  delay_checkin(Config)
                     end
-            end
+            end;
+
+        %% Somehow the pending buffer died, or something even worse!
+        Error ->
+            lager:error("Pending requests buffer error: ~9999p~n", [Error]),
+            Error
     end.
 
 %% Watch Out! This function swaps from the Config on a checkin request to the
