@@ -168,7 +168,11 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
 
         %% A free connection showed up since we first checked...
         {Node, Session_Id} ->
-            handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
+            case is_process_alive(Session_Id) of
+                true  -> handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
+                false -> wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
+                                          Start_Time, Query_Request, Reply_Timeout)
+            end;
 
         %% None are still available, queue the request and wait for one to free up.
         _None_Available ->
