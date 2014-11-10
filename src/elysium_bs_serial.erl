@@ -70,9 +70,9 @@ status(Config) ->
 %%   down or become a concurrency bottleneck.
 %% @end
 checkout_connection(Config) ->
-    Queue_Name  = elysium_config:session_queue_name (Config),
-    Max_Retries = elysium_config:checkout_max_retry (Config),
-    fetch_pid_from_queue(Queue_Name, Max_Retries, -1).
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Retries   = elysium_config:checkout_max_retry (Config),
+    fetch_pid_from_queue(Session_Queue, Max_Retries, -1).
 
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
                          Session_Id::pid(), Is_New_Connection::boolean())
@@ -118,10 +118,10 @@ pend_request(Config, Query_Request) ->
 %%%-----------------------------------------------------------------------
 
 idle_connections(Config) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
-    Buffer_Count = ets_buffer:num_entries_dedicated (Queue_Name),
-    {idle_connections, report_available_resources(Queue_Name, Buffer_Count, Max_Sessions)}.
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
+    Buffer_Count  = ets_buffer:num_entries_dedicated (Session_Queue),
+    {idle_connections, report_available_resources(Session_Queue, Buffer_Count, Max_Sessions)}.
     
 pending_requests(Config) ->
     Pending_Queue = elysium_config:requests_queue_name   (Config),
@@ -135,14 +135,14 @@ report_available_resources(Queue_Name, Num_Sessions, Max) ->
     {Queue_Name, Num_Sessions, Max}.
 
 %% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Queue_Name, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
-fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
-    case ets_buffer:read_dedicated(Queue_Name) of
+fetch_pid_from_queue(_Session_Queue, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
+fetch_pid_from_queue( Session_Queue, Max_Retries, Times_Tried) ->
+    case ets_buffer:read_dedicated(Session_Queue) of
 
         %% Race condition with checkin, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        {missing_ets_data, Queue_Name, _} ->
-            fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
+        {missing_ets_data, Session_Queue, _} ->
+            fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
 
         %% Give up if there are no connections available...
         [] -> none_available;
@@ -151,7 +151,7 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
         [{_Node, Session_Id} = Session_Data] when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
-                false -> fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
+                false -> fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
                 true  -> Session_Data
             end;
 
@@ -162,8 +162,8 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
     end.
 
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
-    Queue_Name = elysium_config:session_queue_name(Config),
-    case fetch_pid_from_queue(Queue_Name, 1, 0) of
+    Session_Queue = elysium_config:session_queue_name(Config),
+    case fetch_pid_from_queue(Session_Queue, 1, 0) of
 
         %% A free connection showed up since we first checked...
         {Node, Session_Id} ->
@@ -264,43 +264,43 @@ receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Mon
 %%   down or become a concurrency bottleneck.
 %% @end
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, true) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
-        true  -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
+        true  -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
     end;
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
         true  -> case decay_causes_death(Config, Session_Id) of
-                     false -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id},
+                     false -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id},
                                            Config, Pending_Queue, false);
                      true  -> _ = decay_session(Config, Session_Id),
-                              fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id})
+                              fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id})
                   end
     end.
 
 %% Session_Data is passed to allow tracing
-fail_checkin(Queue_Name, Max_Sessions, _Session_Data) ->
-    Available = ets_buffer:num_entries_dedicated(Queue_Name),
-    {false, report_available_resources(Queue_Name, Available, Max_Sessions)}.
+fail_checkin(Session_Queue, Max_Sessions, _Session_Data) ->
+    Available = ets_buffer:num_entries_dedicated(Session_Queue),
+    {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
-succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id} = Session_Data,
+succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
         true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available = ets_buffer:write_dedicated(Queue_Name, Session_Data),
-                 {true, report_available_resources(Queue_Name, Available, Max_Sessions)}
+        false -> Available = ets_buffer:write_dedicated(Session_Queue, Session_Data),
+                 {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
 
 delay_checkin(Config) ->
-    Queue_Name    = elysium_config:session_queue_name  (Config),
+    Session_Queue = elysium_config:session_queue_name  (Config),
     Max_Sessions  = elysium_config:session_max_count   (Config),
-    Available     = ets_buffer:num_entries_dedicated (Queue_Name),
-    {pending, report_available_resources(Queue_Name, Available, Max_Sessions)}.
+    Available     = ets_buffer:num_entries_dedicated (Session_Queue),
+    {pending, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 decay_causes_death(Config, _Session_Id) ->
     case elysium_config:decay_probability(Config) of
