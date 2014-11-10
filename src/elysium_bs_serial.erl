@@ -25,6 +25,7 @@
 -export([
          checkin_connection/4,
          checkout_connection/1,
+         handle_pending_request/5,
          pend_request/2,
          status/1
         ]).
@@ -199,12 +200,14 @@ wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Re
 
         %% Previous timed out request sent a Session_Id late, check it in and wait for our expected one.
         {sid, _, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
-            checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
+            _ = is_process_alive(Session_Id)
+                andalso checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case Elapsed_Time >= Reply_Timeout * 1000 of
                 true -> {wait_for_session_timeout, Reply_Timeout};
                 false -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
-                         receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout)
+                         wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time,
+                                               Query_Request, New_Timeout)
             end
 
         %% Any other messages are intended for the blocked caller, leave them in the message queue.
