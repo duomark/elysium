@@ -172,33 +172,41 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
         %% None are still available, queue the request and wait for one to free up.
         _None_Available ->
             _Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-            receive
+            receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout)
+    end.
 
-                %% A live elysium session channel is now available to make the request...
-                {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
+receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
+    receive
+        %% A live elysium session channel is now available to make the request...
+        {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
+            Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
+            case {Elapsed_Time >= Reply_Timeout * 1000, is_process_alive(Session_Id)} of
 
-                    Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
-                    case {Elapsed_Time >= Reply_Timeout * 1000, is_process_alive(Session_Id)} of
+                %% Alas, we timed out waiting...
+                {true,  true}  -> _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
+                                  {wait_for_session_timeout, Reply_Timeout};
+                {true,  false} -> {wait_for_session_timeout, Reply_Timeout};
 
-                        %% Alas, we timed out waiting...
-                        {true,  true}  -> _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
-                                          {wait_for_session_timeout, Reply_Timeout};
-                        {true,  false} -> {wait_for_session_timeout, Reply_Timeout};
+                %% Dead session, loop waiting for another (hopefully live) connection to free up...
+                {false, false} -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
+                                  wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
+                                                   Start_Time, Query_Request, New_Timeout);
 
-                        %% Dead session, loop waiting for another (hopefully live) connection to free up...
-                        {false, false} -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
-                                          wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
-                                                           Start_Time, Query_Request, New_Timeout);
-
-                        %% Get some results while we still have time!
-                        {false, true}  -> handle_pending_request(Elapsed_Time, Reply_Timeout,
-                                                                 Node, Session_Id, Query_Request)
-                    end
-
-                %% Any other messages are intended for the blocked caller, leave them in the message queue.
-
-            after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
+                %% Get some results while we still have time!
+                {false, true}  -> handle_pending_request(Elapsed_Time, Reply_Timeout,
+                                                         Node, Session_Id, Query_Request)
+            end;
+        %% get a session id for likely timeout requests, checkin then wait again    
+        {sid, _, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
+            checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
+            Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
+            case Elapsed_Time >= Reply_Timeout * 1000 of
+                true -> {wait_for_session_timeout, Reply_Timeout};
+                false -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
+                         receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout)
             end
+        %% Any other messages are intended for the blocked caller, leave them in the message queue.
+    after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
     end.
 
 %% Use the Session_Id to run the query if we aren't out of time
