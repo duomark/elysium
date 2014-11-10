@@ -86,13 +86,13 @@ start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
 start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
     case ets_buffer:read_dedicated(Lb_Queue_Name) of
 
-        %% Give up if there are no connections available...
-        [] -> {error, {cassandra_not_available, Attempted_Connections}};
-
         %% Race condition with another user, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         {missing_ets_data, Lb_Queue_Name, _} ->
             start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
+
+        %% Give up if there are no connections available...
+        [] -> {error, {cassandra_not_available, Attempted_Connections}};
 
         %% Attempt to connect to Cassandra node...
         [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
@@ -153,23 +153,29 @@ stop(Session_Id)
 with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
   when is_function(Session_Fun, 3), is_list(Args) ->
     case elysium_bs_serial:checkout_connection(Config) of
-        none_available -> buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
+        none_available ->
+            buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
-            try    Session_Fun(Sid, Args, Consistency)
-            after  _ = elysium_bs_serial:checkin_connection(Config, Node, Sid, false)
-            end
+            Reply_Timeout = elysium_config:request_reply_timeout (Config),
+            Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
+            Reply = elysium_bs_serial:handle_pending_request(0, Reply_Timeout, Node, Sid, Query_Request),
+            handle_bare_fun_reply(Reply, ?MODULE, with_connection, Args)
     end.
 
 buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
 buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
-    case elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}) of
-        {missing_ets_data,         _MED} = Err1 -> report_error(?MODULE, buffer_bare_fun_call, Err1, Args);
-        {missing_ets_buffer,       _MEB} = Err2 -> report_error(?MODULE, buffer_bare_fun_call, Err2, Args);
-        {wait_for_session_timeout, _WST} = Err3 -> report_error(?MODULE, buffer_bare_fun_call, Err3, Args);
-        {worker_reply_error,       _WRE} = Err4 -> report_error(?MODULE, buffer_bare_fun_call, Err4, Args);
-        {worker_reply_timeout,     _WRT} = Err5 -> report_error(?MODULE, buffer_bare_fun_call, Err5, Args);
-        Reply -> Reply
-    end.
+    Reply = elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}),
+    handle_bare_fun_reply(Reply, ?MODULE, buffer_bare_fun_call, Args).
+
+handle_bare_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+  when Err_Type =:= missing_ets_data;
+       Err_Type =:= missing_ets_buffer;
+       Err_Type =:= wait_for_session_time;
+       Err_Type =:= worker_reply_error;
+       Err_Type =:= worker_reply_timeout ->
+    report_error(Error, Mod, Fun, Args);
+handle_bare_fun_reply(Reply, _Mod, _Fun, _Args) ->
+    Reply.
 
 
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
@@ -185,23 +191,28 @@ with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
     case elysium_bs_serial:checkout_connection(Config) of
         none_available       -> buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
-            try    Mod:Fun(Sid, Args, Consistency)
-            after  _ = elysium_bs_serial:checkin_connection(Config, Node, Sid, false)
-            end
+            Reply_Timeout = elysium_config:request_reply_timeout (Config),
+            Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
+            Reply = elysium_bs_serial:handle_pending_request(0, Reply_Timeout, Node, Sid, Query_Request),
+            handle_mod_fun_reply(Reply, Mod, Fun, Args)
     end.
 
 buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
 buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, serial) ->
-    case elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}) of
-        {missing_ets_data,         _MED} = Err1 -> report_error(Mod, Fun, Err1, Args);
-        {missing_ets_buffer,       _MEB} = Err2 -> report_error(Mod, Fun, Err2, Args);
-        {wait_for_session_timeout, _WST} = Err3 -> report_error(Mod, Fun, Err3, Args);
-        {worker_reply_error,       _WRE} = Err4 -> report_error(Mod, Fun, Err4, Args);
-        {worker_reply_timeout,     _WRT} = Err5 -> report_error(Mod, Fun, Err5, Args);
-        Reply -> Reply
-    end.
+    Reply = elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}),
+    handle_mod_fun_reply(Reply, Mod, Fun, Args).
+
+handle_mod_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+  when Err_Type =:= missing_ets_data;
+       Err_Type =:= missing_ets_buffer;
+       Err_Type =:= wait_for_session_time;
+       Err_Type =:= worker_reply_error;
+       Err_Type =:= worker_reply_timeout ->
+    report_error(Error, Mod, Fun, Args);
+handle_mod_fun_reply(Reply, _Mod, _Fun, _Args) ->
+    Reply.
 
 
-report_error(Module, Function, Error, Args) ->
+report_error(Error, Module, Function, Args) ->
     lager:error("~p:~p got ~p with ~p~n", [Module, Function, Error, Args]),
     Error.

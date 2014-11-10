@@ -25,6 +25,7 @@
 -export([
          checkin_connection/4,
          checkout_connection/1,
+         handle_pending_request/5,
          pend_request/2,
          status/1
         ]).
@@ -70,9 +71,9 @@ status(Config) ->
 %%   down or become a concurrency bottleneck.
 %% @end
 checkout_connection(Config) ->
-    Queue_Name  = elysium_config:session_queue_name (Config),
-    Max_Retries = elysium_config:checkout_max_retry (Config),
-    fetch_pid_from_queue(Queue_Name, Max_Retries, -1).
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Retries   = elysium_config:checkout_max_retry (Config),
+    fetch_pid_from_queue(Session_Queue, Max_Retries, -1).
 
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
                          Session_Id::pid(), Is_New_Connection::boolean())
@@ -118,10 +119,10 @@ pend_request(Config, Query_Request) ->
 %%%-----------------------------------------------------------------------
 
 idle_connections(Config) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
-    Buffer_Count = ets_buffer:num_entries_dedicated (Queue_Name),
-    {idle_connections, report_available_resources(Queue_Name, Buffer_Count, Max_Sessions)}.
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
+    Buffer_Count  = ets_buffer:num_entries_dedicated (Session_Queue),
+    {idle_connections, report_available_resources(Session_Queue, Buffer_Count, Max_Sessions)}.
     
 pending_requests(Config) ->
     Pending_Queue = elysium_config:requests_queue_name   (Config),
@@ -135,23 +136,23 @@ report_available_resources(Queue_Name, Num_Sessions, Max) ->
     {Queue_Name, Num_Sessions, Max}.
 
 %% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Queue_Name, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
-fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
-    case ets_buffer:read_dedicated(Queue_Name) of
-
-        %% Give up if there are no connections available...
-        [] -> none_available;
+fetch_pid_from_queue(_Session_Queue, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
+fetch_pid_from_queue( Session_Queue, Max_Retries, Times_Tried) ->
+    case ets_buffer:read_dedicated(Session_Queue) of
 
         %% Race condition with checkin, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        {missing_ets_data, Queue_Name, _} ->
-            fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
+        {missing_ets_data, Session_Queue, _} ->
+            fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
+
+        %% Give up if there are no connections available...
+        [] -> none_available;
 
         %% Return only a live pid, otherwise get the next one.
         [{_Node, Session_Id} = Session_Data] when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
-                false -> fetch_pid_from_queue(Queue_Name, Max_Retries, Times_Tried+1);
+                false -> fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
                 true  -> Session_Data
             end;
 
@@ -162,8 +163,8 @@ fetch_pid_from_queue( Queue_Name, Max_Retries, Times_Tried) ->
     end.
 
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
-    Queue_Name = elysium_config:session_queue_name(Config),
-    case fetch_pid_from_queue(Queue_Name, 1, 0) of
+    Session_Queue = elysium_config:session_queue_name(Config),
+    case fetch_pid_from_queue(Session_Queue, 1, 0) of
 
         %% A free connection showed up since we first checked...
         {Node, Session_Id} ->
@@ -172,10 +173,10 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
         %% None are still available, queue the request and wait for one to free up.
         _None_Available ->
             _Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
-            receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout)
+            wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout)
     end.
 
-receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
+wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     receive
         %% A live elysium session channel is now available to make the request...
         {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
@@ -196,17 +197,30 @@ receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Re
                 {false, true}  -> handle_pending_request(Elapsed_Time, Reply_Timeout,
                                                          Node, Session_Id, Query_Request)
             end;
-        %% get a session id for likely timeout requests, checkin then wait again    
+
+        %% Previous timed out request sent a Session_Id late, check it in and wait for our expected one.
         {sid, _, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
-            checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
+            _ = is_process_alive(Session_Id)
+                andalso checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case Elapsed_Time >= Reply_Timeout * 1000 of
                 true -> {wait_for_session_timeout, Reply_Timeout};
                 false -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
-                         receive_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, New_Timeout)
+                         wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time,
+                                               Query_Request, New_Timeout)
             end
+
         %% Any other messages are intended for the blocked caller, leave them in the message queue.
-    after Reply_Timeout -> {wait_for_session_timeout, Reply_Timeout}
+
+    after Reply_Timeout ->
+            %% Handle race condition messaging vs timeout waiting for message.
+            _ = receive
+                    {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
+                        is_process_alive(Session_Id)
+                            andalso checkin_connection(Config, Node, Session_Id, Is_New_Connection)
+                after 0 -> no_msgs
+                end,
+            {wait_for_session_timeout, Reply_Timeout}
     end.
 
 %% Use the Session_Id to run the query if we aren't out of time
@@ -253,43 +267,43 @@ receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Mon
 %%   down or become a concurrency bottleneck.
 %% @end
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, true) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
-        true  -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
+        true  -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
     end;
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
-    Queue_Name   = elysium_config:session_queue_name (Config),
-    Max_Sessions = elysium_config:session_max_count  (Config),
+    Session_Queue = elysium_config:session_queue_name (Config),
+    Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id});
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
         true  -> case decay_causes_death(Config, Session_Id) of
-                     false -> succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id},
+                     false -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id},
                                            Config, Pending_Queue, false);
                      true  -> _ = decay_session(Config, Session_Id),
-                              fail_checkin(Queue_Name, Max_Sessions, {Node, Session_Id})
+                              fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id})
                   end
     end.
 
 %% Session_Data is passed to allow tracing
-fail_checkin(Queue_Name, Max_Sessions, _Session_Data) ->
-    Available = ets_buffer:num_entries_dedicated(Queue_Name),
-    {false, report_available_resources(Queue_Name, Available, Max_Sessions)}.
+fail_checkin(Session_Queue, Max_Sessions, _Session_Data) ->
+    Available = ets_buffer:num_entries_dedicated(Session_Queue),
+    {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
-succ_checkin(Queue_Name, Max_Sessions, {Node, Session_Id} = Session_Data,
+succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
         true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available = ets_buffer:write_dedicated(Queue_Name, Session_Data),
-                 {true, report_available_resources(Queue_Name, Available, Max_Sessions)}
+        false -> Available = ets_buffer:write_dedicated(Session_Queue, Session_Data),
+                 {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
 
 delay_checkin(Config) ->
-    Queue_Name    = elysium_config:session_queue_name  (Config),
+    Session_Queue = elysium_config:session_queue_name  (Config),
     Max_Sessions  = elysium_config:session_max_count   (Config),
-    Available     = ets_buffer:num_entries_dedicated (Queue_Name),
-    {pending, report_available_resources(Queue_Name, Available, Max_Sessions)}.
+    Available     = ets_buffer:num_entries_dedicated (Session_Queue),
+    {pending, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 decay_causes_death(Config, _Session_Id) ->
     case elysium_config:decay_probability(Config) of
@@ -310,14 +324,14 @@ decay_session(Config, Session_Id) ->
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
 
-        %% There are no pending requests, return the session...
-        [] -> checkin_immediate(Config, Node, Sid, Pending_Queue, Is_New_Connection);
-
         %% Race condition with pend_request, try again...
         %% (Internally, ets_buffer calls erlang:yield() when this happens)
         %% (It is presumed that repeated calling will eventually yield something even [])
         {missing_ets_data, Pending_Queue, _} ->
             checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+
+        %% There are no pending requests, return the session...
+        [] -> checkin_immediate(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
         %% Got a pending request, let's run it...
         [{{Waiting_Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
@@ -351,14 +365,14 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
 exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {bare_fun, Config, Query_Fun, Args, Consistency}) ->
     try   Reply = Query_Fun(Sid, Args, Consistency),
           Reply_Pid ! {wrr, Reply_Ref, Reply}
-    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p~n",
-                                        [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
+    catch A:B -> lager:error("Query execution caught ~p:~p for ~p ~p ~9999p~n",
+                             [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid, false)
     end;
 exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  Fun, Args, Consistency}) ->
     try   Reply = Mod:Fun(Sid, Args, Consistency),
           Reply_Pid ! {wrr, Reply_Ref, Reply}
-    catch A:B -> error_logger:error_msg("Query execution caught ~p:~p for ~p ~p ~9999p~n",
-                                        [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
+    catch A:B -> lager:error("Query execution caught ~p:~p for ~p ~p ~9999p~n",
+                             [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid, false)
     end.
