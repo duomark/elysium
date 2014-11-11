@@ -85,4 +85,9 @@ init({Config}) ->
     lager:info("Creating Cassandra pending_requests ets_buffer '~p'~n", [Pending_Queue_Name]),
     Pending_Queue_Name = ets_buffer:create_dedicated(Pending_Queue_Name, fifo),
 
+    %% Create an Audit table for connection checkin/checkout tracking
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    lager:info("Creating Cassandra audit ets table '~p'~n", [Audit_Name]),
+    Audit_Name = ets:new(Audit_Name, [named_table, public, set, {keypos, 2}]),
+
     {ok, {{one_for_one, 1, 10}, []}}.

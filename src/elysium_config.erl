@@ -67,10 +67,11 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/12,
+         make_vbisect_config/13,
 
          is_elysium_config_enabled/1,
          load_balancer_queue/1,
+         audit_ets_name/1,
          session_queue_name/1,
          requests_queue_name/1,
          request_reply_timeout/1,
@@ -87,6 +88,7 @@
 
 -callback is_elysium_enabled()                  -> boolean().
 -callback cassandra_lb_queue()                  -> lb_queue_name().
+-callback cassandra_audit_ets()                 -> audit_ets_name().
 -callback cassandra_session_queue()             -> session_queue_name().
 -callback cassandra_requests_queue()            -> requests_queue_name().
 -callback cassandra_request_reply_timeout()     -> timeout_in_ms().
@@ -142,31 +144,36 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
--spec make_vbisect_config(boolean(), lb_queue_name(), session_queue_name(), requests_queue_name(),
+-spec make_vbisect_config(boolean(), lb_queue_name(), audit_ets_name(),
+                          session_queue_name(), requests_queue_name(),
                           timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(), timeout_in_ms(),
                           max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
-make_vbisect_config(Enabled, Lb_Queue_Name, Queue_Name, Requests_Queue_Name,
+make_vbisect_config(Enabled, Lb_Queue_Name, Audit_Ets_Name,
+                    Session_Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
                     Max_Sessions, Max_Retries, Decay_Prob)
- when is_atom(Lb_Queue_Name),     is_atom(Queue_Name),  is_atom(Requests_Queue_Name),
-      is_integer(Request_Reply_Timeout), Request_Reply_Timeout > 0,
-      is_list(_Ip), is_integer(_Port), _Port > 0,
+
+ when is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
+      is_atom(Session_Queue_Name),        is_atom(Requests_Queue_Name),
+      is_list(_Ip), is_integer(_Port),    _Port > 0,
+      is_integer(Request_Reply_Timeout),  Request_Reply_Timeout > 0,
       is_integer(Connect_Timeout_Millis), Connect_Timeout_Millis > 0,
       is_integer(Send_Timeout_Millis),    Send_Timeout_Millis > 0,
-      is_integer(Restart_Millis), Restart_Millis > 0,
-      is_integer(Max_Sessions),   Max_Sessions   > 0,
-      is_integer(Max_Retries),    Max_Retries   >= 0,
-      is_integer(Decay_Prob),     Decay_Prob    >= 0, Decay_Prob =< 1000000 ->
+      is_integer(Restart_Millis),         Restart_Millis > 0,
+      is_integer(Max_Sessions),           Max_Sessions   > 0,
+      is_integer(Max_Retries),            Max_Retries   >= 0,
+      is_integer(Decay_Prob),             Decay_Prob    >= 0, Decay_Prob =< 1000000 ->
 
     Props = [
              {<<"is_elysium_enabled">>,                   boolean_to_binary(Enabled)},
              {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,       utf8)},
-             {<<"cassandra_session_queue">>,              atom_to_binary    (Queue_Name,          utf8)},
+             {<<"cassandra_audit_ets">>,                  atom_to_binary    (Audit_Ets_Name,      utf8)},
+             {<<"cassandra_session_queue">>,              atom_to_binary    (Session_Queue_Name,  utf8)},
              {<<"cassandra_requests_queue">>,             atom_to_binary    (Requests_Queue_Name, utf8)},
              {<<"cassandra_request_reply_timeout">>,      integer_to_binary (Request_Reply_Timeout)},
              {<<"cassandra_hosts">>,                      term_to_binary    (Host_List)},
@@ -196,6 +203,12 @@ is_elysium_config_enabled ({vbisect,           Bindict}) -> {ok, Bin_Value} = vb
 %% @doc Get the configured name of the round-robin load balancer queue.
 load_balancer_queue ({config_mod,  Config_Module}) -> Config_Module:cassandra_lb_queue();
 load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
+                                                      binary_to_atom(Bin_Value, utf8).
+
+-spec audit_ets_name (config_type()) -> audit_ets_name().
+%% @doc Get the configured name of the ets table used for auditing internals.
+audit_ets_name  ({config_mod,  Config_Module}) -> Config_Module:cassandra_audit_ets();
+audit_ets_name  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_audit_ets">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec session_queue_name (config_type()) -> session_queue_name().
