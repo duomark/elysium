@@ -23,6 +23,7 @@
 
 %% External API
 -export([
+         create_connection/3,
          checkin_connection/4,
          checkout_connection/1,
          handle_pending_request/5,
@@ -38,6 +39,28 @@
 -define(SERVER, ?MODULE).
 
 -include("elysium_types.hrl").
+
+-type timestamp() :: binary().
+-record(audit_serial, {
+          session_id        :: {module(), pid()},
+
+          init_checkin      :: timestamp(),
+          last_checkin      :: timestamp(),
+          num_checkins  = 0 :: non_neg_integer(),
+
+          init_checkout     :: timestamp(),
+          last_checkout     :: timestamp(),
+          num_checkouts = 0 :: non_neg_integer(),
+
+          init_pending      :: timestamp(),
+          last_pending      :: timestamp(),
+          num_pendings  = 0 :: non_neg_integer(),
+
+          num_decayed   = 0 :: non_neg_integer()
+         }).
+
+-type audit_serial() :: #audit_serial{}.
+-export_type([audit_serial/0]).
 
 
 %%%-----------------------------------------------------------------------
@@ -73,8 +96,20 @@ status(Config) ->
 checkout_connection(Config) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Retries   = elysium_config:checkout_max_retry (Config),
-    fetch_pid_from_queue(Session_Queue, Max_Retries, -1).
+    fetch_pid_from_queue(Config, Session_Queue, Max_Retries, -1).
 
+-spec create_connection(config_type(), {Ip::string(), Port::pos_integer()}, Session_Id::pid())
+                       -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
+                              when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
+                                   Max_Count  :: max_sessions() | ets_buffer:buffer_error().
+%% @doc Create an audit ets_entry, then do checkin_connection.
+create_connection(Config, {_Ip, _Port} = Node, Session_Id)
+  when is_pid(Session_Id) ->
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    Audit_Key  = {?MODULE, Session_Id},
+    ets:insert(Audit_Name, #audit_serial{session_id=Audit_Key, init_checkin=timestamp()}),
+    checkin_connection(Config, Node, Session_Id, true).
+                               
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
                          Session_Id::pid(), Is_New_Connection::boolean())
                         -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
@@ -136,14 +171,17 @@ report_available_resources(Queue_Name, Num_Sessions, Max) ->
     {Queue_Name, Num_Sessions, Max}.
 
 %% Internal loop function to retry getting from the queue.
-fetch_pid_from_queue(_Session_Queue, Max_Retries, Times_Tried) when Times_Tried >= Max_Retries -> none_available;
-fetch_pid_from_queue( Session_Queue, Max_Retries, Times_Tried) ->
+fetch_pid_from_queue(_Config, _Session_Queue, Max_Retries, Times_Tried)
+  when Times_Tried >= Max_Retries ->
+    none_available;
+fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
     case ets_buffer:read_dedicated(Session_Queue) of
 
         %% Race condition with checkin, try again...
-        %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        {missing_ets_data, Session_Queue, _} ->
-            fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
+        %% (When this happens, a connection is left behind in the queue and will never get reused!)
+        {missing_ets_data, Session_Queue, Read_Loc} ->
+            lager:error("Missing ETS data reading ~p at location ~p~n", [Session_Queue, Read_Loc]),
+            fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
 
         %% Give up if there are no connections available...
         [] -> none_available;
@@ -152,8 +190,9 @@ fetch_pid_from_queue( Session_Queue, Max_Retries, Times_Tried) ->
         [{_Node, Session_Id} = Session_Data] when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
-                false -> fetch_pid_from_queue(Session_Queue, Max_Retries, Times_Tried+1);
-                true  -> Session_Data
+                false -> fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
+                true  -> _ = audit_data_checkout(Config, Session_Id),
+                         Session_Data
             end;
 
         %% Somehow the connection buffer died, or something even worse!
@@ -164,11 +203,15 @@ fetch_pid_from_queue( Session_Queue, Max_Retries, Times_Tried) ->
 
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     Session_Queue = elysium_config:session_queue_name(Config),
-    case fetch_pid_from_queue(Session_Queue, 1, 0) of
+    case fetch_pid_from_queue(Config, Session_Queue, 1, 0) of
 
         %% A free connection showed up since we first checked...
         {Node, Session_Id} ->
-            handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
+            case is_process_alive(Session_Id) of
+                true  -> handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
+                false -> wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
+                                          Start_Time, Query_Request, Reply_Timeout)
+            end;
 
         %% None are still available, queue the request and wait for one to free up.
         _None_Available ->
@@ -270,32 +313,34 @@ checkin_immediate(Config, Node, Session_Id, Pending_Queue, true) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
         true  -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
     end;
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id});
+        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
         true  -> case decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id},
                                            Config, Pending_Queue, false);
                      true  -> _ = decay_session(Config, Session_Id),
-                              fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id})
+                              fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config)
                   end
     end.
 
 %% Session_Data is passed to allow tracing
-fail_checkin(Session_Queue, Max_Sessions, _Session_Data) ->
+fail_checkin(Session_Queue, Max_Sessions, {_Node, Session_Id}, Config) ->
     Available = ets_buffer:num_entries_dedicated(Session_Queue),
+    _ = audit_data_delete(Config, Session_Id),
     {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
         true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available = ets_buffer:write_dedicated(Session_Queue, Session_Data),
+        false -> Available  = ets_buffer:write_dedicated(Session_Queue, Session_Data),
+                 _ = audit_data_checkin(Config, Session_Id),
                  {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
 
@@ -316,18 +361,19 @@ decay_causes_death(Config, _Session_Id) ->
 
 decay_session(Config, Session_Id) ->
     Supervisor_Pid = elysium_queue:get_connection_supervisor(),
-    case elysium_connection_sup:stop_child(Supervisor_Pid, Session_Id) of
-        {error, not_found} -> dont_replace_child;
-        ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
-    end.
+    _ = case elysium_connection_sup:stop_child(Supervisor_Pid, Session_Id) of
+            {error, not_found} -> dont_replace_child;
+            ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
+        end,
+    audit_data_delete(Config, Session_Id).
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
 
         %% Race condition with pend_request, try again...
-        %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        %% (It is presumed that repeated calling will eventually yield something even [])
-        {missing_ets_data, Pending_Queue, _} ->
+        %% (When this happens, a pending request is left behind in the queue and will timeout)
+        {missing_ets_data, Pending_Queue, Read_Loc} ->
+            lager:error("Missing ETS data reading ~p at location ~p~n", [Pending_Queue, Read_Loc]),
             checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
         %% There are no pending requests, return the session...
@@ -348,6 +394,7 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
                     case is_process_alive(Waiting_Pid) of
                         false -> checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
                         true  -> Waiting_Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue, Is_New_Connection},
+                                 audit_data_pending(Config, Sid),
                                  delay_checkin(Config)
                     end
             end;
@@ -376,3 +423,41 @@ exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  F
                              [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid, false)
     end.
+
+
+audit_data_checkin(Config, Session_Id) ->
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    Audit_Key  = {?MODULE, Session_Id},
+    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_checkin) of
+        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_checkin, timestamp()});
+        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_checkin, timestamp()})
+    end,
+    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_checkins, 1}).
+
+audit_data_pending(Config, Session_Id) ->
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    Audit_Key  = {?MODULE, Session_Id},
+    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_pending) of
+        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_pending, timestamp()});
+        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_pending, timestamp()})
+    end,
+    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_pendings, 1}).
+
+audit_data_checkout(Config, Session_Id) ->
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    Audit_Key  = {?MODULE, Session_Id},
+    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_checkout) of
+        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_checkout, timestamp()});
+        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_checkout, timestamp()})
+    end,
+    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_checkouts, 1}).
+
+audit_data_delete(Config, Session_Id) ->
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    ets:delete(Audit_Name, {?MODULE, Session_Id}).
+
+timestamp() ->
+    TS = {_,_,Micro} = os:timestamp(),
+    {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
+    Mstr = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
+    list_to_binary(io_lib:format("~4w-~s-~2wT~2w:~2..0w:~2..0w.~6..0w", [Year,Mstr,Day,Hour,Minute,Second,Micro])).

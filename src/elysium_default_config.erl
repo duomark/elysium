@@ -19,6 +19,7 @@
 -export([
          is_elysium_enabled/0,
          cassandra_lb_queue/0,
+         cassandra_audit_ets/0,
          cassandra_session_queue/0,
          cassandra_requests_queue/0,
          cassandra_request_reply_timeout/0,
@@ -41,6 +42,10 @@ is_elysium_enabled() -> true.
 -spec cassandra_lb_queue() -> lb_queue_name().
 %% @doc Using load balancer queue 'elysium_lb_queue'.
 cassandra_lb_queue() -> elysium_lb_queue.
+
+-spec cassandra_audit_ets() -> audit_ets_name().
+%% @doc Using ets table 'elysium_audit'.
+cassandra_audit_ets() -> elysium_audit.
 
 -spec cassandra_session_queue() -> session_queue_name().
 %% @doc Using session queue 'elysium_connection_queue'.

@@ -2,6 +2,7 @@
                      | {vbisect,    vbisect:bindict()}.
 
 -type lb_queue_name()       :: ets_buffer:buffer_name().
+-type audit_ets_name()      :: ets_buffer:buffer_name().
 -type session_queue_name()  :: ets_buffer:buffer_name().
 -type requests_queue_name() :: ets_buffer:buffer_name().
 -type host_list()           :: [{Ip_Addr::string(), Port::pos_integer()}].
