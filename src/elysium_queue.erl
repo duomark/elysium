@@ -228,7 +228,7 @@ terminate(Reason, _State_Name,
 %% @doc Activate if requested, from the 'INACTIVE' state.
 ?inactive(activate, #ef_state{connection_sup=Conn_Sup, config=Config} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
-    _ = [elysium_connection_sup:start_child(Conn_Sup, [Config])
+    _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
          || _N <- lists:seq(1, Max_Sessions)],
     {next_state, ?active, State};
 ?inactive(_Other, #ef_state{} = State) ->
@@ -300,5 +300,10 @@ handle_event(_Any, State_Name, #ef_state{} = State) ->
                              State      :: #ef_state{}.
 %% @private
 %% @doc Unused function.
+handle_info ({'DOWN', _Ref, process,  Connection_Attempt, Reason}, State_Name, #ef_state{} = State) ->
+    Reason =/= normal
+        andalso lager:warn("Elysium connection in process ~p could not be established: ~p~n",
+                           [Connection_Attempt, Reason]),
+    {next_state, State_Name, State};
 handle_info (_Any, State_Name, #ef_state{} = State) ->
     {next_state, State_Name, State}.
