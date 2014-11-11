@@ -42,7 +42,7 @@
 
 -type timestamp() :: binary().
 -record(audit_serial, {
-          session_id        :: {module(), pid()},
+          session_id_key    :: {module(), pid()},
 
           init_checkin      :: timestamp(),
           last_checkin      :: timestamp(),
@@ -54,8 +54,12 @@
 
           init_pending      :: timestamp(),
           last_pending      :: timestamp(),
-          num_pendings  = 0 :: non_neg_integer(),
+          num_pendings  = 0 :: non_neg_integer()
+         }).
 
+-record(audit_serial_counts, {
+          count_type_key    :: {module(), counts},
+          num_timeouts  = 0 :: non_neg_integer(),
           num_decayed   = 0 :: non_neg_integer()
          }).
 
@@ -107,7 +111,7 @@ create_connection(Config, {_Ip, _Port} = Node, Session_Id)
   when is_pid(Session_Id) ->
     Audit_Name = elysium_config:audit_ets_name(Config),
     Audit_Key  = {?MODULE, Session_Id},
-    ets:insert(Audit_Name, #audit_serial{session_id=Audit_Key, init_checkin=timestamp()}),
+    ets:insert(Audit_Name, #audit_serial{session_id_key=Audit_Key, init_checkin=timestamp()}),
     checkin_connection(Config, Node, Session_Id, true).
                                
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
