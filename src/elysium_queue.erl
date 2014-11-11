@@ -170,10 +170,10 @@ terminate(Reason, _State_Name,
               -> {reply, ok, ?inactive, State} when State :: #ef_state{}.
 %% @private
 %% @doc Move to 'INACTIVE' if requested, otherwise stay in 'ACTIVE' state.
-?active(deactivate, _From, #ef_state{config=Config} = State) ->
+?active(deactivate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
     Max_Sessions = elysium_config:session_max_count(Config),
-    Kids = supervisor:which_children(elysium_connection_sup),
-    _ = [supervisor:terminate_child(elysium_connection_sup, Pid) || {undefined, Pid, _, _} <- Kids],
+    Kids = supervisor:which_children(Conn_Sup),
+    _ = [supervisor:terminate_child(Conn_Sup, Pid) || {undefined, Pid, _, _} <- Kids],
     {reply, {length(Kids), Max_Sessions}, ?inactive, #ef_state{} = State};
 ?active  (_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?active, State}.
@@ -210,9 +210,9 @@ terminate(Reason, _State_Name,
 -spec ?active(activate, State) -> {next_state, ?active, State} when State :: #ef_state{}.
 %% @private
 %% @doc Deactivate if requested, from the 'ACTIVE' state.
-?active(deactivate, #ef_state{} = State) ->
-    Kids = supervisor:which_children(elysium_sup),
-    _ = [supervisor:terminate_child(elysium_sup, Id) || {Id, _, _, _} <- Kids],
+?active(deactivate, #ef_state{connection_sup=Conn_Sup} = State) ->
+    Kids = supervisor:which_children(Conn_Sup),
+    _ = [supervisor:terminate_child(Conn_Sup, Id) || {Id, _, _, _} <- Kids],
     {next_state, ?inactive, State};
 ?active(_Other, #ef_state{} = State) ->
     {next_state, ?active,   State}.
