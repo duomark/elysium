@@ -87,8 +87,9 @@ start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
     case ets_buffer:read_dedicated(Lb_Queue_Name) of
 
         %% Race condition with another user, try again...
-        %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        {missing_ets_data, Lb_Queue_Name, _} ->
+        %% (When this happens, a cassandra node is left out permanently!)
+        {missing_ets_data, Lb_Queue_Name, Read_Loc} ->
+            lager:error("Missing ETS data reading ~p at location ~p~n", [Lb_Queue_Name, Read_Loc]),
             start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
 
         %% Give up if there are no connections available...
@@ -174,7 +175,7 @@ buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
 handle_bare_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
   when Err_Type =:= missing_ets_data;
        Err_Type =:= missing_ets_buffer;
-       Err_Type =:= wait_for_session_time;
+       Err_Type =:= wait_for_session_timeout;
        Err_Type =:= worker_reply_error;
        Err_Type =:= worker_reply_timeout ->
     report_error(Error, Mod, Fun, Args);
@@ -213,7 +214,7 @@ buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, serial) ->
 handle_mod_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
   when Err_Type =:= missing_ets_data;
        Err_Type =:= missing_ets_buffer;
-       Err_Type =:= wait_for_session_time;
+       Err_Type =:= wait_for_session_timeout;
        Err_Type =:= worker_reply_error;
        Err_Type =:= worker_reply_timeout ->
     report_error(Error, Mod, Fun, Args);

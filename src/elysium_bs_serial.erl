@@ -178,8 +178,9 @@ fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
     case ets_buffer:read_dedicated(Session_Queue) of
 
         %% Race condition with checkin, try again...
-        %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        {missing_ets_data, Session_Queue, _} ->
+        %% (When this happens, a connection is left behind in the queue and will never get reused!)
+        {missing_ets_data, Session_Queue, Read_Loc} ->
+            lager:error("Missing ETS data reading ~p at location ~p~n", [Session_Queue, Read_Loc]),
             fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
 
         %% Give up if there are no connections available...
@@ -370,9 +371,9 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
 
         %% Race condition with pend_request, try again...
-        %% (Internally, ets_buffer calls erlang:yield() when this happens)
-        %% (It is presumed that repeated calling will eventually yield something even [])
-        {missing_ets_data, Pending_Queue, _} ->
+        %% (When this happens, a pending request is left behind in the queue and will timeout)
+        {missing_ets_data, Pending_Queue, Read_Loc} ->
+            lager:error("Missing ETS data reading ~p at location ~p~n", [Pending_Queue, Read_Loc]),
             checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
         %% There are no pending requests, return the session...
