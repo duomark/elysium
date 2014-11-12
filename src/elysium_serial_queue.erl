@@ -18,8 +18,9 @@
 %% API exports.
 -export([
          start_link/1,
-         checkin/2,  checkin_count/1,
-         checkout/1, checkout_count/1
+         checkin/2,       checkout/1,
+         checkin_count/1, checkout_count/1,
+         num_entries/1,   is_empty/1
         ]).
 
 %% gen_server exports.
@@ -51,6 +52,9 @@
 -spec checkin_count  (queue_name()) -> non_neg_integer().
 -spec checkout_count (queue_name()) -> non_neg_integer().
 
+-spec num_entries (queue_name()) -> non_neg_integer().
+-spec is_empty    (queue_name()) -> boolean().
+
 start_link(Queue_Name) -> gen_server:start_link({local, Queue_Name}, ?MODULE, {}, []).
 
 checkin  (Queue_Name,  Queue_Data) -> gen_server:call(Queue_Name, {checkin, Queue_Data}).
@@ -59,6 +63,8 @@ checkout (Queue_Name)              -> gen_server:call(Queue_Name, checkout).
 checkin_count  (Queue_Name) -> gen_server:call(Queue_Name, checkin_count).
 checkout_count (Queue_Name) -> gen_server:call(Queue_Name, checkout_count).
 
+num_entries (Queue_Name) -> gen_server:call(Queue_Name, num_entries).
+is_empty    (Queue_Name) -> gen_server:call(Queue_Name, is_empty).
 
 %% -------------------------------------------------------------------------
 %% gen_server callback functions
@@ -81,6 +87,9 @@ handle_call(checkout, _From, #state{queue=Queue, checkout_count=Checkouts} = St)
 
 handle_call(checkin_count,  _From, #state{checkin_count=Count}  = St) -> {reply, Count, St};
 handle_call(checkout_count, _From, #state{checkout_count=Count} = St) -> {reply, Count, St};
+handle_call(num_entries,    _From, #state{queue=Queue}          = St) -> {reply, queue:len(Queue),      St};
+handle_call(is_empty,       _From, #state{queue=Queue}          = St) -> {reply, queue:is_empty(Queue), St};
+
 handle_call(Request,        _From, #state{} = St) -> {stop, {unexpected_call, Request}, St}.
 
 

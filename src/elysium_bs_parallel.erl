@@ -233,7 +233,7 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
     case fetch_pid_from_queue(Config, Session_Queue, 1, 0) of
 
         %% A free connection showed up since we first checked...
-        {Node, Session_Id} ->
+        {Node, Session_Id} when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 true  -> handle_pending_request(Config, 0, Reply_Timeout, Node, Session_Id, Query_Request);
                 false -> _ = audit_count(Config, session_dead),
