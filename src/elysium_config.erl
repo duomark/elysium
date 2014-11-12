@@ -212,8 +212,8 @@ load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:
 
 -spec connection_buffering_strategy (config_type()) -> elysium_connection:buffering_strategy().
 %% @doc Get the configured name of the ets table used for auditing internals.
-connection_buffering_strategy  ({config_mod,  Config_Module}) -> Config_Module:cassandra_audit_ets();
-connection_buffering_strategy  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_audit_ets">>, Bindict),
+connection_buffering_strategy  ({config_mod,  Config_Module}) -> Config_Module:cassandra_connection_bs();
+connection_buffering_strategy  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connection_bs">>, Bindict),
                                                                  binary_to_atom(Bin_Value, utf8).
 
 -spec audit_ets_name (config_type()) -> audit_ets_name().
