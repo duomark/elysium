@@ -49,7 +49,7 @@
         ]).
 
 -include("elysium_types.hrl").
--type buffering() :: none | overload | serial.
+-type buffering() :: none | serial | parallel.
 -export_types([buffering/0]).
 
 
@@ -113,7 +113,7 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
                                    [{connect_timeout, Connect_Timeout}]) of
 
         {ok, Pid} = Session when is_pid(Pid) ->
-            _ = elysium_bs_serial:create_connection(Config, Node, Pid),
+            _ = elysium_bs_parallel:create_connection(Config, Node, Pid),
             Session;
 
         %% If we fail, try again after recording attempt.
@@ -153,7 +153,12 @@ stop(Session_Id)
 %% @end
 with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
   when is_function(Session_Fun, 3), is_list(Args) ->
-    case elysium_bs_serial:checkout_connection(Config) of
+    BS_Module = case Buffering_Strategy of
+                    none     -> elysium_nobs;
+                    parallel -> elysium_bs_parallel;
+                    serial   -> elysium_bs_serial
+                end,
+    case BS_Module:checkout_connection(Config) of
         none_available ->
             buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
@@ -161,25 +166,35 @@ with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
                 false -> with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
                 true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
                          Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
-                         Reply = elysium_bs_serial:handle_pending_request(Config, 0, Reply_Timeout,
-                                                                          Node, Sid, Query_Request),
-                         handle_bare_fun_reply(Reply, ?MODULE, with_connection, Args)
+                         Reply = BS_Module:handle_pending_request(Config, 0, Reply_Timeout,
+                                                                  Node, Sid, Query_Request),
+                         handle_bare_fun_reply(Buffering_Strategy, Reply, ?MODULE, with_connection, Args)
             end
     end.
 
-buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
+buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency,     none) -> {error, no_db_connections};
+buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, parallel) ->
+    Reply = elysium_bs_parallel:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}),
+    handle_bare_fun_reply(parallel, Reply, ?MODULE, buffer_bare_fun_call, Args);
 buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, serial) ->
     Reply = elysium_bs_serial:pend_request(Config, {bare_fun, Config, Session_Fun, Args, Consistency}),
-    handle_bare_fun_reply(Reply, ?MODULE, buffer_bare_fun_call, Args).
+    handle_bare_fun_reply(serial, Reply, ?MODULE, buffer_bare_fun_call, Args).
 
-handle_bare_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+handle_bare_fun_reply(parallel, {Err_Type, _Err_Data} = Error, Mod, Fun, Args)
   when Err_Type =:= missing_ets_data;
        Err_Type =:= missing_ets_buffer;
        Err_Type =:= wait_for_session_timeout;
        Err_Type =:= worker_reply_error;
        Err_Type =:= worker_reply_timeout ->
     report_error(Error, Mod, Fun, Args);
-handle_bare_fun_reply(Reply, _Mod, _Fun, _Args) ->
+handle_bare_fun_reply(serial, {Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+  when Err_Type =:= missing_ets_data;
+       Err_Type =:= missing_ets_buffer;
+       Err_Type =:= wait_for_session_timeout;
+       Err_Type =:= worker_reply_error;
+       Err_Type =:= worker_reply_timeout ->
+    report_error(Error, Mod, Fun, Args);
+handle_bare_fun_reply(_Buffering_Strategy, Reply, _Mod, _Fun, _Args) ->
     Reply.
 
 
@@ -193,32 +208,47 @@ handle_bare_fun_reply(Reply, _Mod, _Fun, _Args) ->
 with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
     true = erlang:function_exported(Mod, Fun, 3),
-    case elysium_bs_serial:checkout_connection(Config) of
+    BS_Module = case Buffering_Strategy of
+                    none     -> elysium_nobs;
+                    parallel -> elysium_bs_parallel;
+                    serial   -> elysium_bs_serial
+                end,
+    case BS_Module:checkout_connection(Config) of
         none_available       -> buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
             case is_process_alive(Sid) of
                 false -> with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
                 true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
                          Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
-                         Reply = elysium_bs_serial:handle_pending_request(Config, 0, Reply_Timeout,
-                                                                          Node, Sid, Query_Request),
-                         handle_mod_fun_reply(Reply, Mod, Fun, Args)
+                         Reply = BS_Module:handle_pending_request(Config, 0, Reply_Timeout,
+                                                                  Node, Sid, Query_Request),
+                         handle_mod_fun_reply(Buffering_Strategy, Reply, Mod, Fun, Args)
             end
     end.
 
-buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency, none)   -> {error, no_db_connections};
+buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency,     none) -> {error, no_db_connections};
+buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, parallel) ->
+    Reply = elysium_bs_parallel:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}),
+    handle_mod_fun_reply(parallel, Reply, Mod, Fun, Args);
 buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, serial) ->
     Reply = elysium_bs_serial:pend_request(Config, {mod_fun, Config, Mod, Fun, Args, Consistency}),
-    handle_mod_fun_reply(Reply, Mod, Fun, Args).
+    handle_mod_fun_reply(serial, Reply, Mod, Fun, Args).
 
-handle_mod_fun_reply({Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+handle_mod_fun_reply(parallel, {Err_Type, _Err_Data} = Error, Mod, Fun, Args)
   when Err_Type =:= missing_ets_data;
        Err_Type =:= missing_ets_buffer;
        Err_Type =:= wait_for_session_timeout;
        Err_Type =:= worker_reply_error;
        Err_Type =:= worker_reply_timeout ->
     report_error(Error, Mod, Fun, Args);
-handle_mod_fun_reply(Reply, _Mod, _Fun, _Args) ->
+handle_mod_fun_reply(serial, {Err_Type, _Err_Data} = Error, Mod, Fun, Args)
+  when Err_Type =:= missing_ets_data;
+       Err_Type =:= missing_ets_buffer;
+       Err_Type =:= wait_for_session_timeout;
+       Err_Type =:= worker_reply_error;
+       Err_Type =:= worker_reply_timeout ->
+    report_error(Error, Mod, Fun, Args);
+handle_mod_fun_reply(_Buffering_Strategy, Reply, _Mod, _Fun, _Args) ->
     Reply.
 
 
