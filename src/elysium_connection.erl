@@ -159,11 +159,11 @@ with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
         {Node, Sid} when is_pid(Sid) ->
             case is_process_alive(Sid) of
                 false -> with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
-                true  ->
-                    Reply_Timeout = elysium_config:request_reply_timeout (Config),
-                    Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
-                    Reply = elysium_bs_serial:handle_pending_request(0, Reply_Timeout, Node, Sid, Query_Request),
-                    handle_bare_fun_reply(Reply, ?MODULE, with_connection, Args)
+                true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
+                         Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
+                         Reply = elysium_bs_serial:handle_pending_request(Config, 0, Reply_Timeout,
+                                                                          Node, Sid, Query_Request),
+                         handle_bare_fun_reply(Reply, ?MODULE, with_connection, Args)
             end
     end.
 
@@ -198,11 +198,11 @@ with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
         {Node, Sid} when is_pid(Sid) ->
             case is_process_alive(Sid) of
                 false -> with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
-                true  -> 
-                    Reply_Timeout = elysium_config:request_reply_timeout (Config),
-                    Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
-                    Reply = elysium_bs_serial:handle_pending_request(0, Reply_Timeout, Node, Sid, Query_Request),
-                    handle_mod_fun_reply(Reply, Mod, Fun, Args)
+                true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
+                         Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
+                         Reply = elysium_bs_serial:handle_pending_request(Config, 0, Reply_Timeout,
+                                                                          Node, Sid, Query_Request),
+                         handle_mod_fun_reply(Reply, Mod, Fun, Args)
             end
     end.
 

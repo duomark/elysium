@@ -23,10 +23,11 @@
 
 %% External API
 -export([
+         insert_audit_counts/1,
          create_connection/3,
          checkin_connection/4,
          checkout_connection/1,
-         handle_pending_request/5,
+         handle_pending_request/6,
          pend_request/2,
          status/1
         ]).
@@ -56,20 +57,39 @@
           last_pending      :: timestamp(),
           num_pendings  = 0 :: non_neg_integer()
          }).
+-type audit_serial() :: #audit_serial{}.
 
 -record(audit_serial_counts, {
-          count_type_key    :: {module(), counts},
-          num_timeouts  = 0 :: non_neg_integer(),
-          num_decayed   = 0 :: non_neg_integer()
+          count_type_key            :: {module(), counts},
+          pending_dead          = 0 :: non_neg_integer(),
+          pending_ets_errors    = 0 :: non_neg_integer(),
+          pending_missing_data  = 0 :: non_neg_integer(),
+          pending_timeouts      = 0 :: non_neg_integer(),
+          session_dead          = 0 :: non_neg_integer(),
+          session_decay         = 0 :: non_neg_integer(),
+          session_ets_errors    = 0 :: non_neg_integer(),
+          session_missing_data  = 0 :: non_neg_integer(),
+          session_timeouts      = 0 :: non_neg_integer(),
+          session_wrong         = 0 :: non_neg_integer(),
+          worker_errors         = 0 :: non_neg_integer(),
+          worker_timeouts       = 0 :: non_neg_integer()
          }).
+-type audit_serial_counts() :: #audit_serial_counts{}.
 
--type audit_serial() :: #audit_serial{}.
--export_type([audit_serial/0]).
+-export_type([audit_serial/0, audit_serial_counts/0]).
+
+-define(COUNTS_KEY, {?MODULE, counts}).
 
 
 %%%-----------------------------------------------------------------------
 %%% External API
 %%%-----------------------------------------------------------------------
+
+-spec insert_audit_counts(atom()) -> true.
+%% @doc Insert audit_serial_counts record to hold error increments.
+insert_audit_counts(Audit_Name) ->
+    Count_Rec = #audit_serial_counts{count_type_key=?COUNTS_KEY},
+    true = ets:insert_new(Audit_Name, Count_Rec).
 
 -type resource_counts() :: {idle_connections | pending_requests,
                             {atom(), non_neg_integer(), non_neg_integer()}}.
@@ -111,7 +131,7 @@ create_connection(Config, {_Ip, _Port} = Node, Session_Id)
   when is_pid(Session_Id) ->
     Audit_Name = elysium_config:audit_ets_name(Config),
     Audit_Key  = {?MODULE, Session_Id},
-    ets:insert(Audit_Name, #audit_serial{session_id_key=Audit_Key, init_checkin=timestamp()}),
+    true = ets:insert_new(Audit_Name, #audit_serial{session_id_key=Audit_Key, init_checkin=timestamp()}),
     checkin_connection(Config, Node, Session_Id, true).
                                
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
@@ -184,6 +204,7 @@ fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
         %% Race condition with checkin, try again...
         %% (When this happens, a connection is left behind in the queue and will never get reused!)
         {missing_ets_data, Session_Queue, Read_Loc} ->
+            _ = audit_count(Config, session_missing_data),
             lager:error("Missing ETS data reading ~p at location ~p~n", [Session_Queue, Read_Loc]),
             fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
 
@@ -194,13 +215,15 @@ fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
         [{_Node, Session_Id} = Session_Data] when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
-                false -> fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
+                false -> _ = audit_count(Config, session_dead),
+                         fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
                 true  -> _ = audit_data_checkout(Config, Session_Id),
                          Session_Data
             end;
 
         %% Somehow the connection buffer died, or something even worse!
         Error ->
+            audit_count(Config, session_ets_errors),
             lager:error("Connection buffer error: ~9999p~n", [Error]),
             Error
     end.
@@ -212,8 +235,9 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
         %% A free connection showed up since we first checked...
         {Node, Session_Id} ->
             case is_process_alive(Session_Id) of
-                true  -> handle_pending_request(0, Reply_Timeout, Node, Session_Id, Query_Request);
-                false -> wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
+                true  -> handle_pending_request(Config, 0, Reply_Timeout, Node, Session_Id, Query_Request);
+                false -> _ = audit_count(Config, session_dead),
+                         wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
                                           Start_Time, Query_Request, Reply_Timeout)
             end;
 
@@ -231,27 +255,35 @@ wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Re
             case {Elapsed_Time >= Reply_Timeout * 1000, is_process_alive(Session_Id)} of
 
                 %% Alas, we timed out waiting...
-                {true,  true}  -> _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
+                {true,  true}  -> _ = audit_count(Config, session_timeouts),
+                                  _ = checkin_connection(Config, Node, Session_Id, Is_New_Connection),
                                   {wait_for_session_timeout, Reply_Timeout};
-                {true,  false} -> {wait_for_session_timeout, Reply_Timeout};
+                {true,  false} -> _ = audit_count(Config, session_dead),
+                                  _ = audit_count(Config, session_timeouts),
+                                  {wait_for_session_timeout, Reply_Timeout};
 
                 %% Dead session, loop waiting for another (hopefully live) connection to free up...
-                {false, false} -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
+                {false, false} -> _ = audit_count(Config, session_dead),
+                                  New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
                                   wait_for_session(Config, Pending_Queue, Sid_Reply_Ref,
                                                    Start_Time, Query_Request, New_Timeout);
 
                 %% Get some results while we still have time!
-                {false, true}  -> handle_pending_request(Elapsed_Time, Reply_Timeout,
+                {false, true}  -> handle_pending_request(Config, Elapsed_Time, Reply_Timeout,
                                                          Node, Session_Id, Query_Request)
             end;
 
         %% Previous timed out request sent a Session_Id late, check it in and wait for our expected one.
         {sid, _, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
-            _ = is_process_alive(Session_Id)
-                andalso checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection),
+            _ = audit_count(Config, session_wrong),
+            _ = case is_process_alive(Session_Id) of
+                    false -> audit_count(Config, session_dead);
+                    true  -> checkin_immediate(Config, Node, Session_Id, Pending_Queue, Is_New_Connection)
+                end,
             Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
             case Elapsed_Time >= Reply_Timeout * 1000 of
-                true -> {wait_for_session_timeout, Reply_Timeout};
+                true -> _ = audit_count(Config, session_timeouts),
+                        {wait_for_session_timeout, Reply_Timeout};
                 false -> New_Timeout = Reply_Timeout - (Elapsed_Time div 1000),
                          wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time,
                                                Query_Request, New_Timeout)
@@ -261,17 +293,21 @@ wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Re
 
     after Reply_Timeout ->
             %% Handle race condition messaging vs timeout waiting for message.
+            erlang:yield(),
             _ = receive
                     {sid, Sid_Reply_Ref, Node, Session_Id, Pending_Queue, Is_New_Connection} ->
-                        is_process_alive(Session_Id)
-                            andalso checkin_connection(Config, Node, Session_Id, Is_New_Connection)
+                        case is_process_alive(Session_Id) of
+                            false -> audit_count(Config, session_dead);
+                            true  -> checkin_connection(Config, Node, Session_Id, Is_New_Connection)
+                        end
                 after 0 -> no_msgs
                 end,
+            _ = audit_count(Config, session_timeouts),
             {wait_for_session_timeout, Reply_Timeout}
     end.
 
 %% Use the Session_Id to run the query if we aren't out of time
-handle_pending_request(Elapsed_Time, Reply_Timeout, Node, Session_Id, Query_Request) ->
+handle_pending_request(Config, Elapsed_Time, Reply_Timeout, Node, Session_Id, Query_Request) ->
     %% Self cannot be executed inside the fun(), it needs to be set in the current context.
     Self = self(),
     Worker_Reply_Ref = make_ref(),
@@ -279,16 +315,20 @@ handle_pending_request(Elapsed_Time, Reply_Timeout, Node, Session_Id, Query_Requ
     Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Session_Id, Query_Request) end,
     {Worker_Pid, Worker_Monitor_Ref} = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
     Timeout_Remaining = Reply_Timeout - (Elapsed_Time div 1000),
-    try   receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
+    try   receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
     after erlang:demonitor(Worker_Monitor_Ref, [flush])
     end.
 
 %% Worker_Pid is passed to allow tracing
-receive_worker_reply(Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref) ->
+receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref) ->
     receive
-        {wrr, Worker_Reply_Ref, Reply}                            -> Reply;
-        {'DOWN', Worker_Monitor_Ref, process, Worker_Pid, Reason} -> {worker_reply_error, Reason}
-    after Timeout_Remaining                          -> {worker_reply_timeout, Timeout_Remaining}
+        {wrr, Worker_Reply_Ref, Reply} -> Reply;
+        {'DOWN', Worker_Monitor_Ref, process, Worker_Pid, Reason} ->
+            _ = audit_count(Config, worker_errors),
+            {worker_reply_error, Reason}
+    after Timeout_Remaining ->
+            _ = audit_count(Config, worker_timeouts),
+            {worker_reply_timeout, Timeout_Remaining}
     end.
 
 -spec checkin_immediate(config_type(), {Ip::string(), Port::pos_integer()},
@@ -317,14 +357,16 @@ checkin_immediate(Config, Node, Session_Id, Pending_Queue, true) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
+        false -> _ = audit_count(Config, session_dead),
+                 fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
         true  -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config, Pending_Queue, true)
     end;
 checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Sessions  = elysium_config:session_max_count  (Config),
     case is_process_alive(Session_Id) of
-        false -> fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
+        false -> _ = audit_count(Config, session_dead),
+                 fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
         true  -> case decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id},
                                            Config, Pending_Queue, false);
@@ -335,8 +377,8 @@ checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
 
 %% Session_Data is passed to allow tracing
 fail_checkin(Session_Queue, Max_Sessions, {_Node, Session_Id}, Config) ->
-    Available = ets_buffer:num_entries_dedicated(Session_Queue),
     _ = audit_data_delete(Config, Session_Id),
+    Available = ets_buffer:num_entries_dedicated(Session_Queue),
     {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
@@ -372,6 +414,7 @@ decay_session(Config, Session_Id) ->
             {error, not_found} -> dont_replace_child;
             ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
         end,
+    _ = audit_count(Config, session_decay),
     audit_data_delete(Config, Session_Id).
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
@@ -380,6 +423,7 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
         %% Race condition with pend_request, try again...
         %% (When this happens, a pending request is left behind in the queue and will timeout)
         {missing_ets_data, Pending_Queue, Read_Loc} ->
+            _ = audit_count(Config, pending_missing_data),
             lager:error("Missing ETS data reading ~p at location ~p~n", [Pending_Queue, Read_Loc]),
             checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
@@ -394,20 +438,23 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
 
                 %% Too much time has passed, skip this request and try another...
                 Expired when Expired > Reply_Timeout * 1000 ->
+                    _ = audit_count(Config, pending_timeouts),
                     checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
                 %% There's still time to reply, run the request if the session is still alive.
                 _Remaining_Time ->
                     case is_process_alive(Waiting_Pid) of
-                        false -> checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+                        false -> _ = audit_count(Config, pending_dead),
+                                 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
                         true  -> Waiting_Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue, Is_New_Connection},
-                                 audit_data_pending(Config, Sid),
+                                 _ = audit_data_pending(Config, Sid),
                                  delay_checkin(Config)
                     end
             end;
 
         %% Somehow the pending buffer died, or something even worse!
         Error ->
+            _ = audit_count(Config, pending_ets_errors),
             lager:error("Pending requests buffer error: ~9999p~n", [Error]),
             Error
     end.
@@ -430,6 +477,26 @@ exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  F
                              [A,B, Reply_Pid, Args, erlang:get_stacktrace()])
     after _ = checkin_connection(Config, Node, Sid, false)
     end.
+
+%% Internal auditing functions
+audit_count(Config, Type) ->
+    Audit_Key   = {?MODULE, counts},
+    Audit_Name  = elysium_config:audit_ets_name(Config),
+    Counter_Pos = case Type of
+                      pending_dead          -> #audit_serial_counts.pending_dead;
+                      pending_ets_errors    -> #audit_serial_counts.pending_ets_errors;
+                      pending_missing_data  -> #audit_serial_counts.pending_missing_data;
+                      pending_timeouts      -> #audit_serial_counts.pending_timeouts;
+                      session_dead          -> #audit_serial_counts.session_dead;
+                      session_decay         -> #audit_serial_counts.session_decay;
+                      session_ets_errors    -> #audit_serial_counts.session_ets_errors;
+                      session_missing_data  -> #audit_serial_counts.session_missing_data;
+                      session_timeouts      -> #audit_serial_counts.session_timeouts;
+                      session_wrong         -> #audit_serial_counts.session_wrong;
+                      worker_errors         -> #audit_serial_counts.worker_errors;
+                      worker_timeouts       -> #audit_serial_counts.worker_timeouts
+                  end,
+    ets:update_counter(Audit_Name, Audit_Key, {Counter_Pos, 1}).
 
 
 audit_data_checkin(Config, Session_Id) ->
