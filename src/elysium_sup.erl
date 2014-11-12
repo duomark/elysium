@@ -66,9 +66,15 @@ start_link(Config) ->
 %%   any connections are created.
 %% @end
 init({Config}) ->
-    true        = elysium_config:is_valid_config (Config),
-    Buffer_Sup  = ?SUPER(elysium_buffer_sup,     [Config]),
-    Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
-    Session_Enqueuer_Proc  = ?CHILD(elysium_session_enqueuer, [Config]),
+    true        = elysium_config:is_valid_config(Config),
+    Buffer_Sup  = ?SUPER(elysium_buffer_sup,       [Config]),
+    Queue_Proc  = ?CHILD(elysium_queue,            [Config]),
+    Enq_Proc    = ?CHILD(elysium_session_enqueuer, [Config]),
+    Serial_Session_Queue = ?CHILD(elysium_serial_queue, [elysium_serial_session]),
+    Serial_Pending_Queue = ?CHILD(elysium_serial_queue, [elysium_serial_pending]),
     Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
-    {ok, {{rest_for_one, 10, 10}, [Buffer_Sup, Queue_Proc, Session_Enqueuer_Proc, Conn_Sup]}}.
+    {ok, {{rest_for_one, 10, 10},
+          [Buffer_Sup, Queue_Proc,                       % Ets owner and status reporter
+           Enq_Proc,                                     % Serial writer hack for parallel ets
+           Serial_Session_Queue, Serial_Pending_Queue,   % Queue gen_servers for serial option
+           Conn_Sup]}}.                                  % Connection worker supervisor

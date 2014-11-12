@@ -15,7 +15,7 @@
 %%%   requests attempt to fetch an idle session before being added to
 %%%   the end of the pending queue.
 %%%
-%%% @since 0.1.5
+%%% @since 0.1.6i
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(elysium_bs_serial).
