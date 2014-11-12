@@ -29,7 +29,7 @@
 %%%   checked out connection a process death of the caller can
 %%%   safely take down the connection because the supervisor will
 %%%   immediately spawn a replacement. The simplest technique for
-%%%   managing sessions is to call with_connection/5,6 providing
+%%%   managing sessions is to call with_connection/4,5 providing
 %%%   the CQL commands to execute. The entire checkin/checkout
 %%%   will be taken care of for you, follwing the buffer strategy
 %%%   requested.
@@ -44,13 +44,14 @@
 -export([
          start_link/1,
          stop/1,
-         with_connection/5,
-         with_connection/6
+         get_buffer_strategy_module/1,
+         with_connection/4,
+         with_connection/5
         ]).
 
 -include("elysium_types.hrl").
 -type buffering() :: none | serial | parallel.
--export_types([buffering/0]).
+-export_type([buffering/0]).
 
 
 %%%-----------------------------------------------------------------------
@@ -132,15 +133,25 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
     end.
 
 -spec stop(pid()) -> ok.
-%% @doc
-%%   Stop an existing seestar_session.
-%% @end
+%% @doc Stop an existing seestar_session.
 stop(Session_Id)
   when is_pid(Session_Id) ->
     seestar_session:stop(Session_Id).
 
+-spec get_buffer_strategy_module(config_type()) -> {buffering(), module()}.
+%% @doc Get the module corresponding to the configured buffering strategy.
+get_buffer_strategy_module(Config) ->
+    true = elysium_config:is_valid_config(Config),
+    Buffering_Strategy = elysium_config:connection_buffering_strategy(Config),
+    BS_Module = case Buffering_Strategy of
+                    none     -> elysium_nobs;
+                    parallel -> elysium_bs_parallel;
+                    serial   -> elysium_bs_serial
+                end,
+    {Buffering_Strategy, BS_Module}.
 
--spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency, buffering())
+
+-spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency)
                      -> {error, no_db_connections}
                             | Result when Args        :: [any()],
                                           Consist     :: seestar:consistency(),
@@ -151,19 +162,15 @@ stop(Session_Id)
 %%   for the duration required to execute a fun which
 %%   requires access to Cassandra.
 %% @end
-with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy)
+with_connection(Config, Session_Fun, Args, Consistency)
   when is_function(Session_Fun, 3), is_list(Args) ->
-    BS_Module = case Buffering_Strategy of
-                    none     -> elysium_nobs;
-                    parallel -> elysium_bs_parallel;
-                    serial   -> elysium_bs_serial
-                end,
+    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
     case BS_Module:checkout_connection(Config) of
         none_available ->
             buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
             case is_process_alive(Sid) of
-                false -> with_connection(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
+                false -> with_connection(Config, Session_Fun, Args, Consistency);
                 true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
                          Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
                          Reply = BS_Module:handle_pending_request(Config, 0, Reply_Timeout,
@@ -198,26 +205,22 @@ handle_bare_fun_reply(_Buffering_Strategy, Reply, _Mod, _Fun, _Args) ->
     Reply.
 
 
--spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency(), buffering())
+-spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
                      -> {error, no_db_connections} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
 %%   which requires access to Cassandra.
 %% @end
-with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy)
+with_connection(Config, Mod, Fun, Args, Consistency)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
     true = erlang:function_exported(Mod, Fun, 3),
-    BS_Module = case Buffering_Strategy of
-                    none     -> elysium_nobs;
-                    parallel -> elysium_bs_parallel;
-                    serial   -> elysium_bs_serial
-                end,
+    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
     case BS_Module:checkout_connection(Config) of
         none_available       -> buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
             case is_process_alive(Sid) of
-                false -> with_connection(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
+                false -> with_connection(Config, Mod, Fun, Args, Consistency);
                 true  -> Reply_Timeout = elysium_config:request_reply_timeout (Config),
                          Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
                          Reply = BS_Module:handle_pending_request(Config, 0, Reply_Timeout,

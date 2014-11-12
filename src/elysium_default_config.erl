@@ -44,7 +44,7 @@ is_elysium_enabled() -> true.
 %% @doc Using load balancer queue 'elysium_lb_queue'.
 cassandra_lb_queue() -> elysium_lb_queue.
 
--spec cassandra_connection_bs() -> elysium_connection:buffering_strategy().
+-spec cassandra_connection_bs() -> elysium_connection:buffering().
 %% @doc Using parallel ets_buffers for connections and pending requests.
 cassandra_connection_bs() -> parallel.
 
