@@ -69,5 +69,6 @@ init({Config}) ->
     true        = elysium_config:is_valid_config (Config),
     Buffer_Sup  = ?SUPER(elysium_buffer_sup,     [Config]),
     Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
+    Session_Enqueuer_Proc  = ?CHILD(elysium_session_enqueuer, [Config]),
     Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
-    {ok, {{rest_for_one, 10, 10}, [Buffer_Sup, Queue_Proc, Conn_Sup]}}.
+    {ok, {{rest_for_one, 10, 10}, [Buffer_Sup, Queue_Proc, Session_Enqueuer_Proc, Conn_Sup]}}.
