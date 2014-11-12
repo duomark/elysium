@@ -403,8 +403,8 @@ decay_causes_death(Config, _Session_Id) ->
     case elysium_config:decay_probability(Config) of
         Never_Decays when is_integer(Never_Decays), Never_Decays =:= 0 ->
             false;
-        Probability  when is_integer(Probability),  Probability   >  0, Probability =< 1000000 ->
-            R = elysium_random:random_int_up_to(1000000),
+        Probability  when is_integer(Probability),  Probability   >  0, Probability =< 1000000000 ->
+            R = elysium_random:random_int_up_to(1000000000),
             R =< Probability
     end.
 
