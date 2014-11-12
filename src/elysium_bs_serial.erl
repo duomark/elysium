@@ -343,10 +343,13 @@ succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
         true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available  = ets_buffer:write_dedicated(Session_Queue, Session_Data),
+        false -> Available  = checkin_session(Session_Queue, Session_Data),
                  _ = audit_data_checkin(Config, Session_Id),
                  {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
+
+checkin_session(Session_Queue, Session_Data) ->
+    elysium_session_enqueuer:checkin_session(Session_Queue, Session_Data).
 
 delay_checkin(Config) ->
     Session_Queue = elysium_config:session_queue_name  (Config),
