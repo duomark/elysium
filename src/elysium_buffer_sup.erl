@@ -89,5 +89,9 @@ init({Config}) ->
     Audit_Name = elysium_config:audit_ets_name(Config),
     lager:info("Creating Cassandra audit ets table '~p'~n", [Audit_Name]),
     Audit_Name = ets:new(Audit_Name, [named_table, public, set, {keypos, 2}]),
-
+    case elysium_config:connection_buffering_strategy(Config) of
+        none     -> none;
+        serial   -> elysium_bs_serial   :insert_audit_counts(Audit_Name);
+        parallel -> elysium_bs_parallel :insert_audit_counts(Audit_Name)
+    end,
     {ok, {{one_for_one, 1, 10}, []}}.

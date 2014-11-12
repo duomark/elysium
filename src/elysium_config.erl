@@ -67,10 +67,11 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/13,
+         make_vbisect_config/14,
 
          is_elysium_config_enabled/1,
          load_balancer_queue/1,
+         connection_buffering_strategy/1,
          audit_ets_name/1,
          session_queue_name/1,
          requests_queue_name/1,
@@ -88,6 +89,7 @@
 
 -callback is_elysium_enabled()                  -> boolean().
 -callback cassandra_lb_queue()                  -> lb_queue_name().
+-callback cassandra_connection_bs()             -> elysium_connection:buffering().
 -callback cassandra_audit_ets()                 -> audit_ets_name().
 -callback cassandra_session_queue()             -> session_queue_name().
 -callback cassandra_requests_queue()            -> requests_queue_name().
@@ -112,6 +114,7 @@ all_config_atoms() ->
                        is_elysium_enabled,
                        cassandra_hosts,
                        cassandra_lb_queue,
+                       cassandra_connection_bs,
                        cassandra_session_queue,
                        cassandra_requests_queue,
                        cassandra_request_reply_timeout,
@@ -144,21 +147,22 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
     ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
 
 
--spec make_vbisect_config(boolean(), lb_queue_name(), audit_ets_name(),
-                          session_queue_name(), requests_queue_name(),
+-spec make_vbisect_config(boolean(), lb_queue_name(), elysium_connection:buffering(),
+                          audit_ets_name(), session_queue_name(), requests_queue_name(),
                           timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(), timeout_in_ms(),
                           max_sessions(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
-make_vbisect_config(Enabled, Lb_Queue_Name, Audit_Ets_Name,
-                    Session_Queue_Name, Requests_Queue_Name,
+make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
+                    Audit_Ets_Name, Session_Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
                     Max_Sessions, Max_Retries, Decay_Prob)
 
- when is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
+ when is_atom(Buffering_Strategy),
+      is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
       is_atom(Session_Queue_Name),        is_atom(Requests_Queue_Name),
       is_list(_Ip), is_integer(_Port),    _Port > 0,
       is_integer(Request_Reply_Timeout),  Request_Reply_Timeout > 0,
@@ -172,6 +176,7 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Audit_Ets_Name,
     Props = [
              {<<"is_elysium_enabled">>,                   boolean_to_binary(Enabled)},
              {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,       utf8)},
+             {<<"cassandra_connection_bs">>,              atom_to_binary    (Buffering_Strategy,  utf8)},
              {<<"cassandra_audit_ets">>,                  atom_to_binary    (Audit_Ets_Name,      utf8)},
              {<<"cassandra_session_queue">>,              atom_to_binary    (Session_Queue_Name,  utf8)},
              {<<"cassandra_requests_queue">>,             atom_to_binary    (Requests_Queue_Name, utf8)},
@@ -204,6 +209,12 @@ is_elysium_config_enabled ({vbisect,           Bindict}) -> {ok, Bin_Value} = vb
 load_balancer_queue ({config_mod,  Config_Module}) -> Config_Module:cassandra_lb_queue();
 load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
+
+-spec connection_buffering_strategy (config_type()) -> elysium_connection:buffering().
+%% @doc Get the configured name of the ets table used for auditing internals.
+connection_buffering_strategy  ({config_mod,  Config_Module}) -> Config_Module:cassandra_connection_bs();
+connection_buffering_strategy  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connection_bs">>, Bindict),
+                                                                 binary_to_atom(Bin_Value, utf8).
 
 -spec audit_ets_name (config_type()) -> audit_ets_name().
 %% @doc Get the configured name of the ets table used for auditing internals.

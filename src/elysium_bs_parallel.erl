@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Elysium_bs_serial is a buffering strategy which enforces serial
+%%%   Elysium_bs_parallel is a buffering strategy which enforces serial
 %%%   initiation of Cassandra session queries, although the duration of
 %%%   a query will vary so they are not guaranteed to execute in serial
 %%%   order. This approach allows spikes in the traffic which exceed the
@@ -18,7 +18,7 @@
 %%% @since 0.1.5
 %%% @end
 %%%------------------------------------------------------------------------------
--module(elysium_bs_serial).
+-module(elysium_bs_parallel).
 -author('jay@duomark.com').
 
 %% External API
