@@ -66,8 +66,8 @@ start_link(Config) ->
 %% @end
 init({Config}) ->
     true        = elysium_config:is_valid_config(Config),
-    Session_Queue_Name = Session_Queue = elysium_config:session_queue_name  (Config),
-    Pending_Queue_Name = Pending_Queue = elysium_config:requests_queue_name (Config),
+    Session_Queue_Name = elysium_config:session_queue_name  (Config),
+    Pending_Queue_Name = elysium_config:requests_queue_name (Config),
 
     Buffer_Sup  = ?SUPER(elysium_buffer_sup,       [Config]),
     Queue_Proc  = ?CHILD(elysium_queue,            [Config]),

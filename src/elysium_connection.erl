@@ -114,7 +114,8 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
                                    [{connect_timeout, Connect_Timeout}]) of
 
         {ok, Pid} = Session when is_pid(Pid) ->
-            _ = elysium_bs_parallel:create_connection(Config, Node, Pid),
+            {_Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
+            _ = BS_Module:create_connection(Config, Node, Pid),
             Session;
 
         %% If we fail, try again after recording attempt.

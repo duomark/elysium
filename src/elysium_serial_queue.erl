@@ -76,7 +76,7 @@ init({}) -> {ok, #state{}}.
 terminate(_Reason, _St) -> ok.
 
 handle_call({checkin, Queue_Data}, _From, #state{queue=Queue, checkin_count=Checkins} = St) ->
-    New_Queue = queue:in(Queue, Queue_Data),
+    New_Queue = queue:in(Queue_Data, Queue),
     New_Count = Checkins + 1,
     {reply, ok, St#state{queue=New_Queue, checkin_count=New_Count}};
 
