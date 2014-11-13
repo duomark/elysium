@@ -32,7 +32,9 @@
          cassandra_send_timeout/0,
          cassandra_max_sessions/0,
          cassandra_max_checkout_retry/0,
-         cassandra_session_decay_probability/0
+         cassandra_session_decay_probability/0,
+         cassandra_seed_node/0,
+         cassandra_request_peers_timeout/0
         ]).
 
 -include("elysium_types.hrl").
@@ -93,3 +95,10 @@ cassandra_max_checkout_retry() -> 5.
 %% @doc Kill a live session 100,000 out of 1 Billion times it is used.
 cassandra_session_decay_probability() -> 100000.
     
+-spec cassandra_seed_node() -> binary().
+%% @doc The node where elysium requests the full c* node list. There is no default seed node, hence the non-routable address.
+cassandra_seed_node() -> <<"0.0.0.0:0">>.
+
+-spec cassandra_request_peers_timeout() -> request_peers_timeout().
+%% @doc Check for seestar nodes once a minute
+cassandra_request_peers_timeout() -> 60000.
