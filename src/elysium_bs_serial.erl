@@ -5,17 +5,13 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Elysium_bs_serial is a buffering strategy which enforces serial
-%%%   initiation of Cassandra session queries, although the duration of
-%%%   a query will vary so they are not guaranteed to execute in serial
-%%%   order. This approach allows spikes in the traffic which exceed the
-%%%   number of availabel elysium sessions. The buffer is maintained as
-%%%   a FIFO ets_buffer, so it has overhead when unloading expired pending
-%%%   requests when compared to a LIFO buffer for the same task. All
-%%%   requests attempt to fetch an idle session before being added to
-%%%   the end of the pending queue.
+%%%   Elysium_bs_serial uses elysium_serial_queue for each of the session
+%%%   and pending request queues. It doesn't allow any concurrency other
+%%%   than these two gen_servers which internally maintain an erlang queue
+%%%   of connections in the case of the session queue, and pid + reply_ref
+%%%   in the case of pending CQL requests.
 %%%
-%%% @since 0.1.5
+%%% @since 0.1.6i
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(elysium_bs_serial).
@@ -62,13 +58,9 @@
 -record(audit_serial_counts, {
           count_type_key            :: {module(), counts},
           pending_dead          = 0 :: non_neg_integer(),
-          pending_ets_errors    = 0 :: non_neg_integer(),
-          pending_missing_data  = 0 :: non_neg_integer(),
           pending_timeouts      = 0 :: non_neg_integer(),
           session_dead          = 0 :: non_neg_integer(),
           session_decay         = 0 :: non_neg_integer(),
-          session_ets_errors    = 0 :: non_neg_integer(),
-          session_missing_data  = 0 :: non_neg_integer(),
           session_timeouts      = 0 :: non_neg_integer(),
           session_wrong         = 0 :: non_neg_integer(),
           worker_errors         = 0 :: non_neg_integer(),
@@ -106,13 +98,6 @@ status(Config) ->
 %%   returns a live pid(), or none_available to indicate that all
 %%   connections to Cassandra are currently checked out.
 %%
-%%   If there are internal delays on the ets_buffer FIFO queue,
-%%   this function will retry. If the session handed back is no
-%%   longer live, it is tossed and a new session is fetched. In
-%%   both cases, up to Config_Module:checkout_max_retry attempts
-%%   are tried before returning none_available. If the queue is
-%%   actually empty, no retries are performed.
-%%
 %%   The configuration parameter is not validated because this
 %%   function should be a hotspot and we don't want it to slow
 %%   down or become a concurrency bottleneck.
@@ -133,7 +118,7 @@ create_connection(Config, {_Ip, _Port} = Node, Session_Id)
     Audit_Key  = {?MODULE, Session_Id},
     true = ets:insert_new(Audit_Name, #audit_serial{session_id_key=Audit_Key, init_checkin=timestamp()}),
     checkin_connection(Config, Node, Session_Id, true).
-                               
+
 -spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
                          Session_Id::pid(), Is_New_Connection::boolean())
                         -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
@@ -153,9 +138,9 @@ create_connection(Config, {_Ip, _Port} = Node, Session_Id)
 checkin_connection(Config, {_Ip, _Port} = Node, Session_Id, Is_New_Connection)
   when is_pid(Session_Id) ->
     Pending_Queue = elysium_config:requests_queue_name(Config),
-    case is_process_alive(Session_Id) andalso ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
-        false -> checkin_immediate (Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        true  -> checkin_pending   (Config, Node, Session_Id, Pending_Queue, Is_New_Connection)
+    case is_process_alive(Session_Id) andalso elysium_serial_queue:is_empty(Pending_Queue) of
+        true  -> checkin_immediate (Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
+        false -> checkin_pending   (Config, Node, Session_Id, Pending_Queue, Is_New_Connection)
     end.
 
 -spec pend_request(config_type(), query_request()) -> any() | pend_request_error().
@@ -180,17 +165,15 @@ pend_request(Config, Query_Request) ->
 idle_connections(Config) ->
     Session_Queue = elysium_config:session_queue_name (Config),
     Max_Sessions  = elysium_config:session_max_count  (Config),
-    Buffer_Count  = ets_buffer:num_entries_dedicated (Session_Queue),
+    Buffer_Count  = elysium_serial_queue:num_entries (Session_Queue),
     {idle_connections, report_available_resources(Session_Queue, Buffer_Count, Max_Sessions)}.
     
 pending_requests(Config) ->
     Pending_Queue = elysium_config:requests_queue_name   (Config),
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    Pending_Count = ets_buffer:num_entries_dedicated (Pending_Queue),
+    Pending_Count = elysium_serial_queue:num_entries (Pending_Queue),
     {pending_requests, report_available_resources(Pending_Queue, Pending_Count, Reply_Timeout)}.
 
-report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
-    {Queue_Name, {missing_ets_buffer, 0, Max}};
 report_available_resources(Queue_Name, Num_Sessions, Max) ->
     {Queue_Name, Num_Sessions, Max}.
 
@@ -198,34 +181,19 @@ report_available_resources(Queue_Name, Num_Sessions, Max) ->
 fetch_pid_from_queue(_Config, _Session_Queue, Max_Retries, Times_Tried)
   when Times_Tried >= Max_Retries ->
     none_available;
-fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
-    case ets_buffer:read_dedicated(Session_Queue) of
-
-        %% Race condition with checkin, try again...
-        %% (When this happens, a connection is left behind in the queue and will never get reused!)
-        {missing_ets_data, Session_Queue, Read_Loc} ->
-            _ = audit_count(Config, session_missing_data),
-            lager:error("Missing ETS data reading ~p at location ~p~n", [Session_Queue, Read_Loc]),
-            fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
-
-        %% Give up if there are no connections available...
-        [] -> none_available;
+fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried) ->
+    case elysium_serial_queue:checkout(Session_Queue) of
+        empty -> none_available;
 
         %% Return only a live pid, otherwise get the next one.
-        [{_Node, Session_Id} = Session_Data] when is_pid(Session_Id) ->
+        {value, {_Node, Session_Id} = Session_Data} when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
                 false -> _ = audit_count(Config, session_dead),
                          fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
                 true  -> _ = audit_data_checkout(Config, Session_Id),
                          Session_Data
-            end;
-
-        %% Somehow the connection buffer died, or something even worse!
-        Error ->
-            audit_count(Config, session_ets_errors),
-            lager:error("Connection buffer error: ~9999p~n", [Error]),
-            Error
+            end
     end.
 
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
@@ -233,7 +201,7 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
     case fetch_pid_from_queue(Config, Session_Queue, 1, 0) of
 
         %% A free connection showed up since we first checked...
-        {Node, Session_Id} ->
+        {Node, Session_Id} when is_pid(Session_Id) ->
             case is_process_alive(Session_Id) of
                 true  -> handle_pending_request(Config, 0, Reply_Timeout, Node, Session_Id, Query_Request);
                 false -> _ = audit_count(Config, session_dead),
@@ -242,8 +210,8 @@ wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request
             end;
 
         %% None are still available, queue the request and wait for one to free up.
-        _None_Available ->
-            _Pending_Count = ets_buffer:write_dedicated(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
+        none_available ->
+            _Pending_Count = elysium_serial_queue:checkin(Pending_Queue, {{self(), Sid_Reply_Ref}, Start_Time}),
             wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout)
     end.
 
@@ -345,7 +313,7 @@ receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Wo
 %%
 %%   Sessions have a fixed probability of failure on checkin.
 %%   The decay probability is a number of chances of dying per
-%%   1 Million checkin attempts. If the session is killed, it
+%%   1 Billion checkin attempts. If the session is killed, it
 %%   will be replaced by the supervisor automatically spawning
 %%   a new worker and placing it at the end of the queue.
 %%
@@ -378,25 +346,25 @@ checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
 %% Session_Data is passed to allow tracing
 fail_checkin(Session_Queue, Max_Sessions, {_Node, Session_Id}, Config) ->
     _ = audit_data_delete(Config, Session_Id),
-    Available = ets_buffer:num_entries_dedicated(Session_Queue),
+    Available = elysium_serial_queue:num_entries(Session_Queue),
     {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
-    case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
-        true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available  = checkin_session(Session_Queue, Session_Data),
+    case elysium_serial_queue:is_empty(Pending_Queue) of
+        false -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
+        true  -> Available  = checkin_session(Session_Queue, Session_Data),
                  _ = audit_data_checkin(Config, Session_Id),
                  {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
 
 checkin_session(Session_Queue, Session_Data) ->
-    elysium_session_enqueuer:checkin_session(Session_Queue, Session_Data).
+    elysium_serial_queue:checkin(Session_Queue, Session_Data).
 
 delay_checkin(Config) ->
     Session_Queue = elysium_config:session_queue_name  (Config),
     Max_Sessions  = elysium_config:session_max_count   (Config),
-    Available     = ets_buffer:num_entries_dedicated (Session_Queue),
+    Available     = elysium_serial_queue:num_entries (Session_Queue),
     {pending, report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 decay_causes_death(Config, _Session_Id) ->
@@ -418,20 +386,13 @@ decay_session(Config, Session_Id) ->
     audit_data_delete(Config, Session_Id).
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
-    case ets_buffer:read_dedicated(Pending_Queue) of
-
-        %% Race condition with pend_request, try again...
-        %% (When this happens, a pending request is left behind in the queue and will timeout)
-        {missing_ets_data, Pending_Queue, Read_Loc} ->
-            _ = audit_count(Config, pending_missing_data),
-            lager:error("Missing ETS data reading ~p at location ~p~n", [Pending_Queue, Read_Loc]),
-            checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+    case elysium_serial_queue:checkout(Pending_Queue) of
 
         %% There are no pending requests, return the session...
-        [] -> checkin_immediate(Config, Node, Sid, Pending_Queue, Is_New_Connection);
+        empty -> checkin_immediate(Config, Node, Sid, Pending_Queue, Is_New_Connection);
 
         %% Got a pending request, let's run it...
-        [{{Waiting_Pid, Sid_Reply_Ref}, When_Originally_Queued}] ->
+        {value, {{Waiting_Pid, Sid_Reply_Ref}, When_Originally_Queued}} ->
 
             Reply_Timeout = elysium_config:request_reply_timeout(Config),
             case timer:now_diff(os:timestamp(), When_Originally_Queued) of
@@ -450,13 +411,7 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
                                  _ = audit_data_pending(Config, Sid),
                                  delay_checkin(Config)
                     end
-            end;
-
-        %% Somehow the pending buffer died, or something even worse!
-        Error ->
-            _ = audit_count(Config, pending_ets_errors),
-            lager:error("Pending requests buffer error: ~9999p~n", [Error]),
-            Error
+            end
     end.
 
 %% Watch Out! This function swaps from the Config on a checkin request to the
@@ -484,13 +439,9 @@ audit_count(Config, Type) ->
     Audit_Name  = elysium_config:audit_ets_name(Config),
     Counter_Pos = case Type of
                       pending_dead          -> #audit_serial_counts.pending_dead;
-                      pending_ets_errors    -> #audit_serial_counts.pending_ets_errors;
-                      pending_missing_data  -> #audit_serial_counts.pending_missing_data;
                       pending_timeouts      -> #audit_serial_counts.pending_timeouts;
                       session_dead          -> #audit_serial_counts.session_dead;
                       session_decay         -> #audit_serial_counts.session_decay;
-                      session_ets_errors    -> #audit_serial_counts.session_ets_errors;
-                      session_missing_data  -> #audit_serial_counts.session_missing_data;
                       session_timeouts      -> #audit_serial_counts.session_timeouts;
                       session_wrong         -> #audit_serial_counts.session_wrong;
                       worker_errors         -> #audit_serial_counts.worker_errors;

@@ -51,10 +51,9 @@ start_link(Config) ->
 %%% Internal API
 %%%-----------------------------------------------------------------------
 
--define(CHILD(__Mod, __Args), {__Mod, {__Mod, start_link, __Args},
-                               permanent, 2000, worker, [__Mod]}).
--define(SUPER(__Mod, __Args), {__Mod,  {__Mod, start_link, __Args},
-                               permanent, infinity, supervisor, [__Mod]}).
+-define(CHILD(__Mod, __Args),         {__Mod,  {__Mod, start_link, __Args}, permanent, 2000, worker, [__Mod]}).
+-define(CHILD(__Name, __Mod, __Args), {__Name, {__Mod, start_link, __Args}, permanent, 2000, worker, [__Mod]}).
+-define(SUPER(__Mod, __Args), {__Mod, {__Mod, start_link, __Args}, permanent, infinity, supervisor,  [__Mod]}).
 
 -spec init({config_type()}) -> {ok, {{supervisor:strategy(), non_neg_integer(), non_neg_integer()},
                                      [supervisor:child_spec()]}}.
@@ -66,9 +65,20 @@ start_link(Config) ->
 %%   any connections are created.
 %% @end
 init({Config}) ->
-    true        = elysium_config:is_valid_config (Config),
-    Buffer_Sup  = ?SUPER(elysium_buffer_sup,     [Config]),
-    Queue_Proc  = ?CHILD(elysium_queue,          [Config]),
-    Session_Enqueuer_Proc  = ?CHILD(elysium_session_enqueuer, [Config]),
-    Conn_Sup    = ?SUPER(elysium_connection_sup,       []),
-    {ok, {{rest_for_one, 10, 10}, [Buffer_Sup, Queue_Proc, Session_Enqueuer_Proc, Conn_Sup]}}.
+    true        = elysium_config:is_valid_config(Config),
+    Session_Queue_Name = Session_Queue = elysium_config:session_queue_name  (Config),
+    Pending_Queue_Name = Pending_Queue = elysium_config:requests_queue_name (Config),
+
+    Buffer_Sup  = ?SUPER(elysium_buffer_sup,       [Config]),
+    Queue_Proc  = ?CHILD(elysium_queue,            [Config]),
+    Enq_Proc    = ?CHILD(elysium_session_enqueuer, [Config]),
+    Conn_Sup    = ?SUPER(elysium_connection_sup,         []),
+
+    Serial_Session_Queue = ?CHILD(elysium_serial_sessions, elysium_serial_queue, [Session_Queue_Name]),
+    Serial_Pending_Queue = ?CHILD(elysium_serial_pendings, elysium_serial_queue, [Pending_Queue_Name]),
+
+    {ok, {{rest_for_one, 10, 10},
+          [Buffer_Sup, Queue_Proc,                       % Ets owner and status reporter
+           Enq_Proc,                                     % Serial writer hack for parallel ets
+           Serial_Session_Queue, Serial_Pending_Queue,   % Queue gen_servers for serial option
+           Conn_Sup]}}.                                  % Connection worker supervisor
