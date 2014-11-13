@@ -83,7 +83,7 @@ handle_call({checkin, Queue_Data}, _From, #state{queue=Queue, checkin_count=Chec
 handle_call(checkout, _From, #state{queue=Queue, checkout_count=Checkouts} = St) ->
     {Value, New_Queue} = queue:out(Queue),
     New_Count = Checkouts + 1,
-    {reply, Value, St#state{queue=New_Queue, checkin_count=New_Count}};
+    {reply, Value, St#state{queue=New_Queue, checkout_count=New_Count}};
 
 handle_call(checkin_count,  _From, #state{checkin_count=Count}  = St) -> {reply, Count, St};
 handle_call(checkout_count, _From, #state{checkout_count=Count} = St) -> {reply, Count, St};
