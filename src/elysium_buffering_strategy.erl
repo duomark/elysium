@@ -62,7 +62,7 @@
 -callback pend_request(config_type(), query_request()) -> query_result().
 
 %% When a connection is available, a pending request can be executed.
--callback handle_pending_request(config_type(), Elapsed_Time::timeout_in_ms, Reply_Timeout::timeout_in_ms,
+-callback handle_pending_request(config_type(), Elapsed_Time::timeout_in_ms(), Reply_Timeout::timeout_in_ms(),
                                  cassandra_node(), connection_id(), query_request()) -> query_result().
 
 %% Create the auditing ets table entry for telemetry counts not specific to a connection.
