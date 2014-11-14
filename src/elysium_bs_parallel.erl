@@ -21,85 +21,76 @@
 -module(elysium_bs_parallel).
 -author('jay@duomark.com').
 
-%% External API
+-behaviour(elysium_buffering_strategy).
+-behaviour(elysium_buffering_audit).
+
+%% Buffering strategy API
 -export([
-         insert_audit_counts/1,
-         create_connection/3,
          checkin_connection/4,
          checkout_connection/1,
-         handle_pending_request/6,
          pend_request/2,
+         handle_pending_request/6,
+         insert_audit_counts/1,
          status/1
         ]).
 
-%% FSM states
--type fun_request()   :: fun((pid(), [any()], seestar:consistency()) -> [any()]).
--type query_request() :: {bare_fun, config_type(), fun_request(), [any()], seestar:consistency()}
-                       | {mod_fun, config_type(), module(), atom(), [any()], seestar:consistency()}.
-
--define(SERVER, ?MODULE).
+%% Buffering audit API
+-export([audit_count/2]).
 
 -include("elysium_types.hrl").
+-include("elysium_audit_types.hrl").
 
--type timestamp() :: binary().
--record(audit_serial, {
-          session_id_key    :: {module(), pid()},
-
-          init_checkin      :: timestamp(),
-          last_checkin      :: timestamp(),
-          num_checkins  = 0 :: non_neg_integer(),
-
-          init_checkout     :: timestamp(),
-          last_checkout     :: timestamp(),
-          num_checkouts = 0 :: non_neg_integer(),
-
-          init_pending      :: timestamp(),
-          last_pending      :: timestamp(),
-          num_pendings  = 0 :: non_neg_integer()
+-record(audit_parallel_counts, {
+          count_type_key            :: {buffering_strategy_module(), counts},
+          pending_dead          = 0 :: audit_count(),
+          pending_ets_errors    = 0 :: audit_count(),
+          pending_missing_data  = 0 :: audit_count(),
+          pending_timeouts      = 0 :: audit_count(),
+          session_dead          = 0 :: audit_count(),
+          session_decay         = 0 :: audit_count(),
+          session_ets_errors    = 0 :: audit_count(),
+          session_missing_data  = 0 :: audit_count(),
+          session_timeouts      = 0 :: audit_count(),
+          session_wrong         = 0 :: audit_count(),
+          worker_errors         = 0 :: audit_count(),
+          worker_timeouts       = 0 :: audit_count()
          }).
--type audit_serial() :: #audit_serial{}.
 
--record(audit_serial_counts, {
-          count_type_key            :: {module(), counts},
-          pending_dead          = 0 :: non_neg_integer(),
-          pending_ets_errors    = 0 :: non_neg_integer(),
-          pending_missing_data  = 0 :: non_neg_integer(),
-          pending_timeouts      = 0 :: non_neg_integer(),
-          session_dead          = 0 :: non_neg_integer(),
-          session_decay         = 0 :: non_neg_integer(),
-          session_ets_errors    = 0 :: non_neg_integer(),
-          session_missing_data  = 0 :: non_neg_integer(),
-          session_timeouts      = 0 :: non_neg_integer(),
-          session_wrong         = 0 :: non_neg_integer(),
-          worker_errors         = 0 :: non_neg_integer(),
-          worker_timeouts       = 0 :: non_neg_integer()
-         }).
--type audit_serial_counts() :: #audit_serial_counts{}.
+-type audit_parallel_counts() :: #audit_parallel_counts{}.
+-export_type([audit_parallel_counts/0]).
 
--export_type([audit_serial/0, audit_serial_counts/0]).
-
+-define(SERVER,     ?MODULE).
 -define(COUNTS_KEY, {?MODULE, counts}).
 
 
 %%%-----------------------------------------------------------------------
-%%% External API
+%%% Buffering strategy behaviour API
 %%%-----------------------------------------------------------------------
 
--spec insert_audit_counts(atom()) -> true.
-%% @doc Insert audit_serial_counts record to hold error increments.
-insert_audit_counts(Audit_Name) ->
-    Count_Rec = #audit_serial_counts{count_type_key=?COUNTS_KEY},
-    true = ets:insert_new(Audit_Name, Count_Rec).
+-spec checkin_connection(config_type(), cassandra_node(), connection_id(), Is_New_Connection::boolean())
+                        -> {boolean() | pending, {connection_queue_name(), Idle_Count, Max_Count}}
+                               when Idle_Count :: max_connections(),
+                                    Max_Count  :: max_connections().
+%% @doc
+%%   Checkin a seestar_session, IF there are no pending requests.
+%%   A checkin will continue looping on the pending queue with
+%%   the chance for decay on each attempt. If it decays, any
+%%   newly spawned replacement is expected to check the pending
+%%   queue for outstanding requests. Brand new connections are
+%%   not checked for decay before first use.
+%%
+%%   This function can loop forever if there are pending requests,
+%%   so it performs an asynchronous send_event.
+%% @end
+checkin_connection(Config, {_Ip, _Port} = Node, Connection_Id, Is_New_Connection)
+  when is_pid(Connection_Id) ->
+    Pending_Queue = elysium_config:requests_queue_name(Config),
+    case is_process_alive(Connection_Id) andalso ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
+        false -> checkin_immediate (Config, Node, Connection_Id, Pending_Queue, Is_New_Connection);
+        true  -> checkin_pending   (Config, Node, Connection_Id, Pending_Queue, Is_New_Connection)
+    end.
 
--type resource_counts() :: {idle_connections | pending_requests,
-                            {atom(), non_neg_integer(), non_neg_integer()}}.
--spec status(config_type()) -> {status, [resource_counts()]}.
-%% @doc Get the current queue size of the pending queue.
-status(Config) ->
-    {status, [idle_connections(Config),
-              pending_requests(Config)]}.
-
--spec checkout_connection(config_type()) -> {{Ip::string(), Port::pos_integer()}, pid()} | none_available.
+-spec checkout_connection(config_type()) -> {cassandra_node(), connection_id()} | none_available.
 %% @doc
 %%   Allocate a seestar_session to the caller by popping an entry
 %%   from the front of the connection queue. This function either
@@ -122,42 +113,6 @@ checkout_connection(Config) ->
     Max_Retries   = elysium_config:checkout_max_retry (Config),
     fetch_pid_from_queue(Config, Session_Queue, Max_Retries, -1).
 
--spec create_connection(config_type(), {Ip::string(), Port::pos_integer()}, Session_Id::pid())
-                       -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
-                              when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
-                                   Max_Count  :: max_sessions() | ets_buffer:buffer_error().
-%% @doc Create an audit ets_entry, then do checkin_connection.
-create_connection(Config, {_Ip, _Port} = Node, Session_Id)
-  when is_pid(Session_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
-    Audit_Key  = {?MODULE, Session_Id},
-    true = ets:insert_new(Audit_Name, #audit_serial{session_id_key=Audit_Key, init_checkin=timestamp()}),
-    checkin_connection(Config, Node, Session_Id, true).
-                               
--spec checkin_connection(config_type(), {Ip::string(), Port::pos_integer()},
-                         Session_Id::pid(), Is_New_Connection::boolean())
-                        -> {boolean() | pending, {session_queue_name(), Idle_Count, Max_Count}}
-                               when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
-                                    Max_Count  :: max_sessions() | ets_buffer:buffer_error().
-%% @doc
-%%   Checkin a seestar_session, IF there are no pending requests.
-%%   A checkin will continue looping on the pending queue with
-%%   the chance for decay on each attempt. If it decays, any
-%%   newly spawned replacement is expected to check the pending
-%%   queue for outstanding requests. Brand new connections are
-%%   not checked for decay before first use.
-%%
-%%   This function can loop forever if there are pending requests,
-%%   so it performs an asynchronous send_event.
-%% @end
-checkin_connection(Config, {_Ip, _Port} = Node, Session_Id, Is_New_Connection)
-  when is_pid(Session_Id) ->
-    Pending_Queue = elysium_config:requests_queue_name(Config),
-    case is_process_alive(Session_Id) andalso ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
-        false -> checkin_immediate (Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        true  -> checkin_pending   (Config, Node, Session_Id, Pending_Queue, Is_New_Connection)
-    end.
-
 -spec pend_request(config_type(), query_request()) -> any() | pend_request_error().
 %%   Block the caller while the request is serially queued. When
 %%   a session is avialable to run this pending request, the
@@ -172,27 +127,33 @@ pend_request(Config, Query_Request) ->
     Reply_Timeout = elysium_config:request_reply_timeout (Config),
     wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout).
 
+%% Use the Connection_Id to run the query if we aren't out of time
+handle_pending_request(Config, Elapsed_Time, Reply_Timeout, Node, Connection_Id, Query_Request) ->
+    %% Self cannot be executed inside the fun(), it needs to be set in the current context.
+    Self = self(),
+    Worker_Reply_Ref = make_ref(),
+    %% Avoiding export of exec_pending_request/5
+    Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Connection_Id, Query_Request) end,
+    {Worker_Pid, Worker_Monitor_Ref} = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
+    Timeout_Remaining = Reply_Timeout - (Elapsed_Time div 1000),
+    try   receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
+    after erlang:demonitor(Worker_Monitor_Ref, [flush])
+    end.
+
+-spec insert_audit_counts(audit_ets_name()) -> true.
+%% @doc Insert audit_parallel_counts record to audit ets table to hold error increments.
+insert_audit_counts(Audit_Name) ->
+    Count_Rec = #audit_parallel_counts{count_type_key=?COUNTS_KEY},
+    true = ets:insert_new(Audit_Name, Count_Rec).
+
+-spec status(config_type()) -> status_reply().
+%% @doc Get the current queue size of the pending queue.
+status(Config) -> elysium_buffering_strategy:status(Config).
+
 
 %%%-----------------------------------------------------------------------
 %%% Internal support functions
 %%%-----------------------------------------------------------------------
-
-idle_connections(Config) ->
-    Session_Queue = elysium_config:session_queue_name (Config),
-    Max_Sessions  = elysium_config:session_max_count  (Config),
-    Buffer_Count  = ets_buffer:num_entries_dedicated (Session_Queue),
-    {idle_connections, report_available_resources(Session_Queue, Buffer_Count, Max_Sessions)}.
-    
-pending_requests(Config) ->
-    Pending_Queue = elysium_config:requests_queue_name   (Config),
-    Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    Pending_Count = ets_buffer:num_entries_dedicated (Pending_Queue),
-    {pending_requests, report_available_resources(Pending_Queue, Pending_Count, Reply_Timeout)}.
-
-report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
-    {Queue_Name, {missing_ets_buffer, 0, Max}};
-report_available_resources(Queue_Name, Num_Sessions, Max) ->
-    {Queue_Name, Num_Sessions, Max}.
 
 %% Internal loop function to retry getting from the queue.
 fetch_pid_from_queue(_Config, _Session_Queue, Max_Retries, Times_Tried)
@@ -217,7 +178,7 @@ fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
                 %% NOTE: we toss only MAX_CHECKOUT_RETRY dead pids
                 false -> _ = audit_count(Config, session_dead),
                          fetch_pid_from_queue(Config, Session_Queue, Max_Retries, Times_Tried+1);
-                true  -> _ = audit_data_checkout(Config, Session_Id),
+                true  -> _ = elysium_buffering_audit:audit_data_checkout(Config, ?MODULE, Session_Id),
                          Session_Data
             end;
 
@@ -228,6 +189,8 @@ fetch_pid_from_queue( Config,  Session_Queue, Max_Retries, Times_Tried) ->
             Error
     end.
 
+-spec wait_for_session(config_type(), requests_queue_name(), reference(), erlang:timestamp(),
+                       query_request(), timeout_in_ms()) -> any() | pend_request_error().
 wait_for_session(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Request, Reply_Timeout) ->
     Session_Queue = elysium_config:session_queue_name(Config),
     case fetch_pid_from_queue(Config, Session_Queue, 1, 0) of
@@ -306,19 +269,6 @@ wait_for_session_loop(Config, Pending_Queue, Sid_Reply_Ref, Start_Time, Query_Re
             {wait_for_session_timeout, Reply_Timeout}
     end.
 
-%% Use the Session_Id to run the query if we aren't out of time
-handle_pending_request(Config, Elapsed_Time, Reply_Timeout, Node, Session_Id, Query_Request) ->
-    %% Self cannot be executed inside the fun(), it needs to be set in the current context.
-    Self = self(),
-    Worker_Reply_Ref = make_ref(),
-    %% Avoiding export of exec_pending_request/5
-    Worker_Fun = fun() -> exec_pending_request(Worker_Reply_Ref, Self, Node, Session_Id, Query_Request) end,
-    {Worker_Pid, Worker_Monitor_Ref} = spawn_opt(Worker_Fun, [monitor]),   % May want to add other options
-    Timeout_Remaining = Reply_Timeout - (Elapsed_Time div 1000),
-    try   receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref)
-    after erlang:demonitor(Worker_Monitor_Ref, [flush])
-    end.
-
 %% Worker_Pid is passed to allow tracing
 receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Worker_Monitor_Ref) ->
     receive
@@ -331,11 +281,11 @@ receive_worker_reply(Config, Worker_Reply_Ref, Timeout_Remaining, Worker_Pid, Wo
             {worker_reply_timeout, Timeout_Remaining}
     end.
 
--spec checkin_immediate(config_type(), {Ip::string(), Port::pos_integer()},
-                        Session_Id::pid(), Pending_Queue::requests_queue_name(), Is_New_Connection::boolean())
-                       -> {boolean(), {session_queue_name(), Idle_Count, Max_Count}}
-                              when Idle_Count :: max_sessions() | ets_buffer:buffer_error(),
-                                   Max_Count  :: max_sessions() | ets_buffer:buffer_error().
+-spec checkin_immediate(config_type(), cassandra_node(), connection_id(),
+                        Pending_Queue::requests_queue_name(), Is_New_Connection::boolean())
+                       -> {boolean(), {connection_queue_name(), Idle_Count, Max_Count}}
+                              when Idle_Count :: max_connections(),
+                                   Max_Count  :: max_connections().
 %% @doc
 %%   Checkin a seestar_session by putting it at the end of the
 %%   available connection queue. Returns whether the checkin was
@@ -367,27 +317,28 @@ checkin_immediate(Config, Node, Session_Id, Pending_Queue, false) ->
     case is_process_alive(Session_Id) of
         false -> _ = audit_count(Config, session_dead),
                  fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config);
-        true  -> case decay_causes_death(Config, Session_Id) of
+        true  -> case elysium_buffering_strategy:decay_causes_death(Config, Session_Id) of
                      false -> succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id},
                                            Config, Pending_Queue, false);
-                     true  -> _ = decay_session(Config, Session_Id),
+                     true  -> _ = elysium_buffering_strategy:decay_connection(Config, ?MODULE, Session_Id),
                               fail_checkin(Session_Queue, Max_Sessions, {Node, Session_Id}, Config)
                   end
     end.
 
 %% Session_Data is passed to allow tracing
 fail_checkin(Session_Queue, Max_Sessions, {_Node, Session_Id}, Config) ->
-    _ = audit_data_delete(Config, Session_Id),
+    _ = elysium_buffering_audit:audit_data_delete(Config, ?MODULE, Session_Id),
     Available = ets_buffer:num_entries_dedicated(Session_Queue),
-    {false, report_available_resources(Session_Queue, Available, Max_Sessions)}.
+    {false, elysium_buffering_strategy:report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 succ_checkin(Session_Queue, Max_Sessions, {Node, Session_Id} = Session_Data,
              Config, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:num_entries_dedicated(Pending_Queue) > 0 of
         true  -> checkin_pending(Config, Node, Session_Id, Pending_Queue, Is_New_Connection);
-        false -> Available  = checkin_session(Session_Queue, Session_Data),
-                 _ = audit_data_checkin(Config, Session_Id),
-                 {true, report_available_resources(Session_Queue, Available, Max_Sessions)}
+        false ->
+            Available  = checkin_session(Session_Queue, Session_Data),
+            _ = elysium_buffering_audit:audit_data_checkin(Config, ?MODULE, Session_Id),
+            {true, elysium_buffering_strategy:report_available_resources(Session_Queue, Available, Max_Sessions)}
     end.
 
 checkin_session(Session_Queue, Session_Data) ->
@@ -397,25 +348,7 @@ delay_checkin(Config) ->
     Session_Queue = elysium_config:session_queue_name  (Config),
     Max_Sessions  = elysium_config:session_max_count   (Config),
     Available     = ets_buffer:num_entries_dedicated (Session_Queue),
-    {pending, report_available_resources(Session_Queue, Available, Max_Sessions)}.
-
-decay_causes_death(Config, _Session_Id) ->
-    case elysium_config:decay_probability(Config) of
-        Never_Decays when is_integer(Never_Decays), Never_Decays =:= 0 ->
-            false;
-        Probability  when is_integer(Probability),  Probability   >  0, Probability =< 1000000000 ->
-            R = elysium_random:random_int_up_to(1000000000),
-            R =< Probability
-    end.
-
-decay_session(Config, Session_Id) ->
-    Supervisor_Pid = elysium_queue:get_connection_supervisor(),
-    _ = case elysium_connection_sup:stop_child(Supervisor_Pid, Session_Id) of
-            {error, not_found} -> dont_replace_child;
-            ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
-        end,
-    _ = audit_count(Config, session_decay),
-    audit_data_delete(Config, Session_Id).
+    {pending, elysium_buffering_strategy:report_available_resources(Session_Queue, Available, Max_Sessions)}.
 
 checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
     case ets_buffer:read_dedicated(Pending_Queue) of
@@ -447,7 +380,7 @@ checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection) ->
                         false -> _ = audit_count(Config, pending_dead),
                                  checkin_pending(Config, Node, Sid, Pending_Queue, Is_New_Connection);
                         true  -> Waiting_Pid ! {sid, Sid_Reply_Ref, Node, Sid, Pending_Queue, Is_New_Connection},
-                                 _ = audit_data_pending(Config, Sid),
+                                 _ = elysium_buffering_audit:audit_data_pending(Config, ?MODULE, Sid),
                                  delay_checkin(Config)
                     end
             end;
@@ -478,60 +411,26 @@ exec_pending_request(Reply_Ref, Reply_Pid, Node, Sid, {mod_fun,  Config, Mod,  F
     after _ = checkin_connection(Config, Node, Sid, false)
     end.
 
-%% Internal auditing functions
+
+%%%-----------------------------------------------------------------------
+%%% Buffering audit behaviour API
+%%%-----------------------------------------------------------------------
+         
 audit_count(Config, Type) ->
     Audit_Key   = {?MODULE, counts},
     Audit_Name  = elysium_config:audit_ets_name(Config),
     Counter_Pos = case Type of
-                      pending_dead          -> #audit_serial_counts.pending_dead;
-                      pending_ets_errors    -> #audit_serial_counts.pending_ets_errors;
-                      pending_missing_data  -> #audit_serial_counts.pending_missing_data;
-                      pending_timeouts      -> #audit_serial_counts.pending_timeouts;
-                      session_dead          -> #audit_serial_counts.session_dead;
-                      session_decay         -> #audit_serial_counts.session_decay;
-                      session_ets_errors    -> #audit_serial_counts.session_ets_errors;
-                      session_missing_data  -> #audit_serial_counts.session_missing_data;
-                      session_timeouts      -> #audit_serial_counts.session_timeouts;
-                      session_wrong         -> #audit_serial_counts.session_wrong;
-                      worker_errors         -> #audit_serial_counts.worker_errors;
-                      worker_timeouts       -> #audit_serial_counts.worker_timeouts
+                      pending_dead          -> #audit_parallel_counts.pending_dead;
+                      pending_ets_errors    -> #audit_parallel_counts.pending_ets_errors;
+                      pending_missing_data  -> #audit_parallel_counts.pending_missing_data;
+                      pending_timeouts      -> #audit_parallel_counts.pending_timeouts;
+                      session_dead          -> #audit_parallel_counts.session_dead;
+                      session_decay         -> #audit_parallel_counts.session_decay;
+                      session_ets_errors    -> #audit_parallel_counts.session_ets_errors;
+                      session_missing_data  -> #audit_parallel_counts.session_missing_data;
+                      session_timeouts      -> #audit_parallel_counts.session_timeouts;
+                      session_wrong         -> #audit_parallel_counts.session_wrong;
+                      worker_errors         -> #audit_parallel_counts.worker_errors;
+                      worker_timeouts       -> #audit_parallel_counts.worker_timeouts
                   end,
     ets:update_counter(Audit_Name, Audit_Key, {Counter_Pos, 1}).
-
-
-audit_data_checkin(Config, Session_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
-    Audit_Key  = {?MODULE, Session_Id},
-    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_checkin) of
-        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_checkin, timestamp()});
-        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_checkin, timestamp()})
-    end,
-    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_checkins, 1}).
-
-audit_data_pending(Config, Session_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
-    Audit_Key  = {?MODULE, Session_Id},
-    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_pending) of
-        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_pending, timestamp()});
-        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_pending, timestamp()})
-    end,
-    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_pendings, 1}).
-
-audit_data_checkout(Config, Session_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
-    Audit_Key  = {?MODULE, Session_Id},
-    case ets:lookup_element(Audit_Name, Audit_Key, #audit_serial.init_checkout) of
-        undefined  -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.init_checkout, timestamp()});
-        _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#audit_serial.last_checkout, timestamp()})
-    end,
-    ets:update_counter(Audit_Name, Audit_Key, {#audit_serial.num_checkouts, 1}).
-
-audit_data_delete(Config, Session_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
-    ets:delete(Audit_Name, {?MODULE, Session_Id}).
-
-timestamp() ->
-    TS = {_,_,Micro} = os:timestamp(),
-    {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
-    Mstr = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
-    list_to_binary(io_lib:format("~4w-~s-~2wT~2w:~2..0w:~2..0w.~6..0w", [Year,Mstr,Day,Hour,Minute,Second,Micro])).

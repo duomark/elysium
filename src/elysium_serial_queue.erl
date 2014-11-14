@@ -41,12 +41,11 @@
 %% API
 %% -------------------------------------------------------------------------
 
--type queue_name() :: atom().
 -type queue_data() :: any().
 
 -spec start_link(queue_name()) -> {ok, pid()}.
 
--spec checkin  (queue_name(), queue_data()) -> ok.
+-spec checkin  (queue_name(), queue_data()) -> non_neg_integer().
 -spec checkout (queue_name())               -> {value, queue_data()} | empty.
 
 -spec checkin_count  (queue_name()) -> non_neg_integer().
@@ -78,7 +77,7 @@ terminate(_Reason, _St) -> ok.
 handle_call({checkin, Queue_Data}, _From, #state{queue=Queue, checkin_count=Checkins} = St) ->
     New_Queue = queue:in(Queue_Data, Queue),
     New_Count = Checkins + 1,
-    {reply, ok, St#state{queue=New_Queue, checkin_count=New_Count}};
+    {reply, queue:len(New_Queue), St#state{queue=New_Queue, checkin_count=New_Count}};
 
 handle_call(checkout, _From, #state{queue=Queue, checkout_count=Checkouts} = St) ->
     {Value, New_Queue} = queue:out(Queue),
