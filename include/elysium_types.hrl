@@ -31,9 +31,11 @@
 -type max_connections()        :: pos_integer() | connection_count_error().
 -type pending_count()          :: pos_integer() | connection_count_error().
 
--type status_count() :: {idle_connections, {connection_queue_name(), Idle::max_connections(), Max::max_connections()}}
-                      | {pending_requests, {requests_queue_name(), pending_count(), timeout_in_ms()}}.
--type status_reply() :: {status, [status_count()]}.
+-type idle_status()    :: {idle_connections, {connection_queue_name(),
+                                              Idle::max_connections(), Max::max_connections()}}.
+-type pending_status() :: {pending_requests, {requests_queue_name(),
+                                              pending_count(), timeout_in_ms()}}.
+-type status_reply()   :: {status, {idle_status(), pending_status()}}.
 
 %% Errors when a pending request does not get a chance to return a query result.
 -type wait_for_session_error() :: {wait_for_session_timeout, pos_integer()}

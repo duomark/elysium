@@ -27,6 +27,8 @@
          pend_request/2,
          handle_pending_request/6,
          insert_audit_counts/1,
+         idle_connection_count/1,
+         pending_request_count/1,
          status/1
         ]).
 
@@ -126,14 +128,27 @@ handle_pending_request(Config, Elapsed_Time, Reply_Timeout, Node, Connection_Id,
     end.
 
 -spec insert_audit_counts(audit_ets_name()) -> true.
-%% @doc Insert audit_serial_counts record to audit ets table hold error increments.
+%% @doc Insert audit_serial_counts record to audit ets table to hold error increments.
 insert_audit_counts(Audit_Name) ->
     Count_Rec = #audit_serial_counts{count_type_key=?COUNTS_KEY},
     true = ets:insert_new(Audit_Name, Count_Rec).
 
+-spec idle_connection_count(config_type()) -> max_connections().
+%% @doc Get the current number of idle connections.
+idle_connection_count(Config) ->
+    Connection_Queue = elysium_config:session_queue_name(Config),
+    elysium_serial_queue:num_entries(Connection_Queue).
+
+-spec pending_request_count(config_type()) -> pending_count().
+%% @doc Get the current number of pending requests.
+pending_request_count(Config) ->
+    Pending_Queue = elysium_config:requests_queue_name(Config),
+    elysium_serial_queue:num_entries(Pending_Queue).
+
 -spec status(config_type()) -> status_reply().
 %% @doc Get the current queue size of the pending queue.
-status(Config) -> elysium_buffering_strategy:status(Config).
+status(Config) ->
+    elysium_buffering_strategy:status(Config).
 
 
 %%%-----------------------------------------------------------------------

@@ -68,6 +68,12 @@
 %% Create the auditing ets table entry for telemetry counts not specific to a connection.
 -callback insert_audit_counts(audit_ets_name()) -> true.
 
+%% Get the current number of idle connections.
+-callback idle_connection_count(config_type()) -> max_connections().
+
+%% Get the current number of pending requests.
+-callback pending_request_count(config_type()) -> pending_count().
+
 %% Report idle connection count and pending requests count.
 -callback status(config_type()) -> status_reply().
                                             
@@ -115,8 +121,8 @@ decay_connection(Config, BS_Module, Connection_Id) ->
     elysium_buffering_audit:audit_data_delete(Config, BS_Module, Connection_Id).
 
 status(Config) ->
-    {status, [idle_connections(Config),
-              pending_requests(Config)]}.
+    {status, {idle_connections(Config),
+              pending_requests(Config)}}.
 
 report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
     {Queue_Name, {missing_ets_buffer, 0, Max}};
@@ -129,13 +135,15 @@ report_available_resources(Queue_Name, Num_Sessions, Max) ->
 %%%-----------------------------------------------------------------------
 
 idle_connections(Config) ->
-    Session_Queue = elysium_config:session_queue_name (Config),
-    Max_Sessions  = elysium_config:session_max_count  (Config),
-    Buffer_Count  = ets_buffer:num_entries_dedicated (Session_Queue),
-    {idle_connections, report_available_resources(Session_Queue, Buffer_Count, Max_Sessions)}.
+    Connection_Queue = elysium_config:session_queue_name             (Config),
+    Max_Connections  = elysium_config:session_max_count              (Config),
+    {_BS, BS_Module} = elysium_connection:get_buffer_strategy_module (Config),
+    Idle_Count       = BS_Module:idle_connection_count               (Config),
+    {idle_connections, report_available_resources(Connection_Queue, Idle_Count, Max_Connections)}.
     
 pending_requests(Config) ->
-    Pending_Queue = elysium_config:requests_queue_name   (Config),
-    Reply_Timeout = elysium_config:request_reply_timeout (Config),
-    Pending_Count = ets_buffer:num_entries_dedicated (Pending_Queue),
+    Pending_Queue    = elysium_config:requests_queue_name            (Config),
+    Reply_Timeout    = elysium_config:request_reply_timeout          (Config),
+    {_BS, BS_Module} = elysium_connection:get_buffer_strategy_module (Config),
+    Pending_Count    = BS_Module:pending_request_count               (Config),
     {pending_requests, report_available_resources(Pending_Queue, Pending_Count, Reply_Timeout)}.
