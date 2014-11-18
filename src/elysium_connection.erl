@@ -43,6 +43,7 @@
 %% External API
 -export([
          start_link/1,
+         start_link/2,
          stop/1,
          get_buffer_strategy_module/1,
          with_connection/4,
@@ -58,10 +59,9 @@
 %%% External API
 %%%-----------------------------------------------------------------------
 
--type node_attempt() :: {Ip::string(), Port::pos_integer()}.
 -spec start_link(config_type()) -> {ok, pid()}
                                        | {error, {cassandra_not_available,
-                                                  [node_attempt()]}}.
+                                                  [cassandra_node()]}}.
 %% @doc
 %%   Create a new seestar_session (a gen_server) and record its pid()
 %%   in the elysium_connection ets_buffer. This FIFO queue serves up
@@ -76,8 +76,14 @@
 start_link(Config) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
-    Restart_Delay = elysium_config:max_restart_delay   (Config),
-    ok = timer:sleep(elysium_random:random_int_up_to(Restart_Delay)),
+    Start_Delay = elysium_config:max_restart_delay   (Config),
+    ok = timer:sleep(elysium_random:random_int_up_to(Start_Delay)),
+    start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
+
+%% @doc Restarts do not delay since they are stochastic already.
+start_link(Config, restart) ->
+    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
+    Max_Retries   = elysium_config:checkout_max_retry  (Config),
     start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
 start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)

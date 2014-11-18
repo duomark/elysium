@@ -365,7 +365,7 @@ decay_connection(Config, BS_Module, Connection_Id) ->
     Supervisor_Pid = elysium_queue:get_connection_supervisor(),
     _ = case elysium_connection_sup:stop_child(Supervisor_Pid, Connection_Id) of
             {error, not_found} -> dont_replace_child;
-            ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config])
+            ok -> elysium_connection_sup:start_child(Supervisor_Pid, [Config, restart])
         end,
     _ = elysium_buffering_audit:audit_count   (Config, BS_Module, session_decay),
     elysium_buffering_audit:audit_data_delete (Config, BS_Module, Connection_Id).

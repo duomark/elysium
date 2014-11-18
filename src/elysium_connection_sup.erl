@@ -60,7 +60,7 @@ start_link() ->
 
 -spec start_child(pid(), [config_type()]) -> {ok, pid()}.
 %% @doc Start a new Cassandra connection using the config load balanced node list.
-start_child(Sup_Pid, [Config] = Args) ->
+start_child(Sup_Pid, [Config | _More] = Args) ->
     true = elysium_config:is_valid_config(Config),
     supervisor:start_child(Sup_Pid, Args).
 
