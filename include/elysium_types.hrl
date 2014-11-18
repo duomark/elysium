@@ -26,16 +26,25 @@
 -type query_request() :: {bare_fun, config_type(), fun_request(),    [any()], seestar:consistency()}
                        | {mod_fun,  config_type(), module(), atom(), [any()], seestar:consistency()}.
 
+-type cassandra_connection()  :: {cassandra_node(), connection_id()}.
+-type connection_baton()      :: {{connection_id(), reference}, erlang:timestamp()}.
+
+-type pending_request_pid()   :: pid().
+-type pending_request_baton() :: {{pending_request_pid(), reference()}, erlang:timestamp()}.
+
 %% Connection count errors reported by ets_buffer, new buffering strategies may need new error types.
 -type connection_count_error() :: ets_buffer:buffer_error().
 -type max_connections()        :: pos_integer() | connection_count_error().
 -type pending_count()          :: pos_integer() | connection_count_error().
 
--type idle_status()    :: {idle_connections, {connection_queue_name(),
-                                              Idle::max_connections(), Max::max_connections()}}.
--type pending_status() :: {pending_requests, {requests_queue_name(),
-                                              pending_count(), timeout_in_ms()}}.
--type status_reply()   :: {status, {idle_status(), pending_status()}}.
+-type idle_status()     :: {idle_connections, {connection_queue_name(),
+                                               Idle::max_connections(), Max::max_connections()}}.
+-type pending_status()  :: {pending_requests, {requests_queue_name(),
+                                               pending_count(), timeout_in_ms()}}.
+-type status_reply()    :: {status, {idle_status(), pending_status()}}.
+
+-type pending_checkin() :: {boolean() | pending, {connection_queue_name(),
+                                                  max_connections(), max_connections()}}.
 
 %% Errors when a pending request does not get a chance to return a query result.
 -type wait_for_session_error() :: {wait_for_session_timeout, pos_integer()}

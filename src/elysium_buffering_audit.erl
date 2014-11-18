@@ -16,19 +16,39 @@
 -author('jay@duomark.com').
 
 -export([
-         timestamp/0,
-         audit_count_init/3,
+         audit_count_init/2,
+         audit_count/3,
+
+         audit_data_init/3,
          audit_data_checkin/3,
          audit_data_pending/3,
          audit_data_checkout/3,
-         audit_data_delete/3
+         audit_data_delete/3,
+
+         timestamp/0
         ]).
 
 -include("elysium_types.hrl").
 -include("elysium_audit_types.hrl").
 
-%% Individual counts for connection, pending, worker and other counts across all connections.
--callback audit_count(config_type(), audit_count_event() | atom()) -> audit_count().
+%% Callbacks required for mantaining telemetry statistics.
+-callback audit_count(audit_counts_ets_name(), audit_custom_counts_key(), audit_custom_event()) -> audit_count().
+-callback audit_count_init(config_type(), audit_counts_ets_name(), audit_custom_counts_key()) -> boolean().
+
+-record(elysium_audit_counts, {
+          count_type_key            :: audit_std_counts_key(),
+          pending_dead          = 0 :: audit_count(),
+          pending_timeouts      = 0 :: audit_count(),
+          session_dead          = 0 :: audit_count(),
+          session_decay         = 0 :: audit_count(),
+          session_timeouts      = 0 :: audit_count(),
+          session_wrong         = 0 :: audit_count(),
+          worker_errors         = 0 :: audit_count(),
+          worker_timeouts       = 0 :: audit_count(),
+          custom_counts = undefined :: audit_custom_counts()
+         }).
+
+-type elysium_audit_counts() :: #elysium_audit_counts{}.
 
 -record(elysium_audit, {
           connection_id_key :: audit_connection_key(),
@@ -47,32 +67,64 @@
          }).
 
 -type elysium_audit() :: #elysium_audit{}.
--export_type([elysium_audit/0]).
 
--spec timestamp() -> audit_timestamp().
-timestamp() ->
-    TS = {_,_,Micro} = os:timestamp(),
-    {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
-    Month_Str = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
-    Time_Str  = io_lib:format("~4w-~s-~2wT~2w:~2..0w:~2..0w.~6..0w",
-                              [Year, Month_Str, Day, Hour, Minute, Second, Micro]),
-    list_to_binary(Time_Str).
+-export_type([elysium_audit/0, elysium_audit_counts/0]).
 
-%% Counts maintained per connection.
--spec audit_count_init    (config_type(), buffering_strategy_module(), connection_id()) -> true.
+
+%%%-----------------------------------------------------------------------
+%%% Audit counts across all connections
+%%%-----------------------------------------------------------------------
+
+-spec audit_count_init (config_type(), buffering_strategy_module()) -> true.
+-spec audit_count      (config_type(), buffering_strategy_module(),
+                        audit_count_event() | audit_custom_event()) -> audit_count().
+
+audit_count_init(Config, BS_Module) ->
+    Audit_Key        = {BS_Module, counts},
+    Audit_Custom_Key = {BS_Module, custom_counts},
+    Audit_Name       = elysium_config:audit_ets_name(Config),
+    true = BS_Module:audit_count_init(Config, Audit_Name, Audit_Custom_Key),
+    true = ets:insert_new(Audit_Name, #elysium_audit_counts{count_type_key=Audit_Key}).
+
+audit_count(Config, BS_Module, Type) ->
+    Audit_Key   = {?MODULE, counts},
+    Audit_Name  = elysium_config:audit_ets_name(Config),
+    case Type of
+        pending_dead      -> count(Audit_Name, Audit_Key, #elysium_audit_counts.pending_dead     );
+        pending_timeouts  -> count(Audit_Name, Audit_Key, #elysium_audit_counts.pending_timeouts );
+        session_dead      -> count(Audit_Name, Audit_Key, #elysium_audit_counts.session_dead     );
+        session_decay     -> count(Audit_Name, Audit_Key, #elysium_audit_counts.session_decay    );
+        session_timeouts  -> count(Audit_Name, Audit_Key, #elysium_audit_counts.session_timeouts );
+        session_wrong     -> count(Audit_Name, Audit_Key, #elysium_audit_counts.session_wrong    );
+        worker_errors     -> count(Audit_Name, Audit_Key, #elysium_audit_counts.worker_errors    );
+        worker_timeouts   -> count(Audit_Name, Audit_Key, #elysium_audit_counts.worker_timeouts  );
+        Custom_Type when is_atom(Custom_Type) ->
+            Audit_Custom_Key = {BS_Module, custom_counts},
+            BS_Module:audit_count(Audit_Name, Audit_Custom_Key, Custom_Type)
+    end.
+
+count(Audit_Name, Audit_Key, Counter_Pos) ->
+    ets:update_counter(Audit_Name, Audit_Key, {Counter_Pos, 1}).
+
+
+%%%-----------------------------------------------------------------------
+%%% Audit counts for each connection
+%%%-----------------------------------------------------------------------
+
+-spec audit_data_init     (config_type(), buffering_strategy_module(), connection_id()) -> true.
 -spec audit_data_checkin  (config_type(), buffering_strategy_module(), connection_id()) -> audit_count().
 -spec audit_data_pending  (config_type(), buffering_strategy_module(), connection_id()) -> audit_count().
 -spec audit_data_checkout (config_type(), buffering_strategy_module(), connection_id()) -> audit_count().
 -spec audit_data_delete   (config_type(), buffering_strategy_module(), connection_id()) -> true.
 
-audit_count_init(Config, BS_Module, Connection_Id) ->
+audit_data_init(Config, BS_Module, Connection_Id) ->
     Audit_Key  = {BS_Module, Connection_Id},
     Audit_Name = elysium_config:audit_ets_name(Config),
     true = ets:insert_new(Audit_Name, #elysium_audit{connection_id_key=Audit_Key, init_checkin=timestamp()}).
 
 audit_data_checkin(Config, BS_Module, Connection_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
     Audit_Key  = {BS_Module, Connection_Id},
+    Audit_Name = elysium_config:audit_ets_name(Config),
     case ets:lookup_element(Audit_Name, Audit_Key, #elysium_audit.init_checkin) of
         undefined  -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.init_checkin, timestamp()});
         _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.last_checkin, timestamp()})
@@ -80,8 +132,8 @@ audit_data_checkin(Config, BS_Module, Connection_Id) ->
     ets:update_counter(Audit_Name, Audit_Key, {#elysium_audit.num_checkins, 1}).
 
 audit_data_pending(Config, BS_Module, Connection_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
     Audit_Key  = {BS_Module, Connection_Id},
+    Audit_Name = elysium_config:audit_ets_name(Config),
     case ets:lookup_element(Audit_Name, Audit_Key, #elysium_audit.init_pending) of
         undefined  -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.init_pending, timestamp()});
         _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.last_pending, timestamp()})
@@ -89,8 +141,8 @@ audit_data_pending(Config, BS_Module, Connection_Id) ->
     ets:update_counter(Audit_Name, Audit_Key, {#elysium_audit.num_pendings, 1}).
 
 audit_data_checkout(Config, BS_Module, Connection_Id) ->
-    Audit_Name = elysium_config:audit_ets_name(Config),
     Audit_Key  = {BS_Module, Connection_Id},
+    Audit_Name = elysium_config:audit_ets_name(Config),
     case ets:lookup_element(Audit_Name, Audit_Key, #elysium_audit.init_checkout) of
         undefined  -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.init_checkout, timestamp()});
         _Timestamp -> ets:update_element(Audit_Name, Audit_Key, {#elysium_audit.last_checkout, timestamp()})
@@ -100,3 +152,17 @@ audit_data_checkout(Config, BS_Module, Connection_Id) ->
 audit_data_delete(Config, BS_Module, Connection_Id) ->
     Audit_Name = elysium_config:audit_ets_name(Config),
     ets:delete(Audit_Name, {BS_Module, Connection_Id}).
+
+
+%%%-----------------------------------------------------------------------
+%%% Timestamps are used by all audit functions
+%%%-----------------------------------------------------------------------
+
+-spec timestamp() -> audit_timestamp().
+timestamp() ->
+    TS = {_,_,Micro} = os:timestamp(),
+    {{Year,Month,Day},{Hour,Minute,Second}} = calendar:now_to_universal_time(TS),
+    Month_Str = element(Month,{"Jan","Feb","Mar","Apr","May","Jun","Jul", "Aug","Sep","Oct","Nov","Dec"}),
+    Time_Str  = io_lib:format("~4w-~s-~2wT~2w:~2..0w:~2..0w.~6..0w",
+                              [Year, Month_Str, Day, Hour, Minute, Second, Micro]),
+    list_to_binary(Time_Str).
