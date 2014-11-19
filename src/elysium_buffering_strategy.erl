@@ -402,14 +402,14 @@ idle_connections(Config) ->
     Connection_Queue = elysium_config:session_queue_name             (Config),
     Max_Connections  = elysium_config:session_max_count              (Config),
     {_BS, BS_Module} = elysium_connection:get_buffer_strategy_module (Config),
-    Idle_Count       = BS_Module:idle_connection_count               (Config),
+    Idle_Count       = BS_Module:idle_connection_count        (Connection_Queue),
     {idle_connections, report_available_resources(Connection_Queue, Idle_Count, Max_Connections)}.
     
 pending_requests(Config) ->
     Pending_Queue    = elysium_config:requests_queue_name            (Config),
     Reply_Timeout    = elysium_config:request_reply_timeout          (Config),
     {_BS, BS_Module} = elysium_connection:get_buffer_strategy_module (Config),
-    Pending_Count    = BS_Module:pending_request_count               (Config),
+    Pending_Count    = BS_Module:pending_request_count           (Pending_Queue),
     {pending_requests, report_available_resources(Pending_Queue, Pending_Count, Reply_Timeout)}.
 
 %% Worker_Pid is passed to allow tracing
