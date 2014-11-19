@@ -38,9 +38,9 @@
 -export([
          status/1,
 
-         create_connection/4,
+         create_connection/3,
          checkin_connection/4,
-         checkout_connection/2,
+         checkout_connection/1,
          pend_request/2,
 
          decay_causes_death/2,
@@ -74,13 +74,13 @@
 %%% Buffering strategy provided functions
 %%%-----------------------------------------------------------------------
 
--spec create_connection(config_type(), buffering_strategy_module(), cassandra_node(), connection_id())
+-spec create_connection(config_type(), cassandra_node(), connection_id())
                         -> pending_checkin().
 
 -spec checkin_connection(config_type(), cassandra_node(), connection_id(), Is_New_Connection::boolean())
                         -> pending_checkin().
 
--spec checkout_connection(config_type(), buffering_strategy_module()) -> cassandra_connection() | none_available.
+-spec checkout_connection(config_type()) -> cassandra_connection() | none_available.
 
 -spec pend_request(config_type(), query_request()) -> query_result().
 
@@ -94,8 +94,9 @@
                                             Max_Or_Timeout :: max_connections() | timeout_in_ms().
 
 %% @doc Do any initialization before checkin of a newly created connection.
-create_connection(Config, BS_Module, {_Ip, _Port} = Node, Connection_Id)
+create_connection(Config, {_Ip, _Port} = Node, Connection_Id)
   when is_pid(Connection_Id) ->
+    {_Buffering_Strategy, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
     elysium_buffering_audit:audit_data_init(Config, BS_Module, Connection_Id),
     checkin_connection(Config, Node, Connection_Id, true).
 
@@ -126,7 +127,7 @@ checkin_connection(Config, {_Ip, _Port} = Node, Connection_Id, Is_New_Connection
 %%   function should be a hotspot and we don't want it to slow
 %%   down or become a concurrency bottleneck.
 %% @end
-checkout_connection(Config, BS_Module) ->
+checkout_connection(Config) ->
     Connection_Queue = elysium_config:session_queue_name             (Config),
     Max_Retries      = elysium_config:checkout_max_retry             (Config),
     {_BS, BS_Module} = elysium_connection:get_buffer_strategy_module (Config),

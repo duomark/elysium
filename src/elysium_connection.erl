@@ -131,7 +131,7 @@ get_buffer_strategy_module(Config) ->
 with_connection(Config, Session_Fun, Args, Consistency)
   when is_function(Session_Fun, 3), is_list(Args) ->
     {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
-    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
+    case elysium_buffering_strategy:checkout_connection(Config) of
         none_available ->
             buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
@@ -156,7 +156,7 @@ with_connection(Config, Mod, Fun, Args, Consistency)
   when is_atom(Mod), is_atom(Fun), is_list(Args) ->
     true = erlang:function_exported(Mod, Fun, 3),
     {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
-    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
+    case elysium_buffering_strategy:checkout_connection(Config) of
         none_available ->
             buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
         {Node, Sid} when is_pid(Sid) ->
@@ -209,8 +209,7 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
                                    [{connect_timeout, Connect_Timeout}]) of
 
         {ok, Connection_Id} = Connection when is_pid(Connection_Id) ->
-            {_Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
-            _ = elysium_buffering_strategy:create_connection(Config, BS_Module, Node, Connection_Id),
+            _ = elysium_buffering_strategy:create_connection(Config, Node, Connection_Id),
             Connection;
 
         %% If we fail, try again after recording attempt.
