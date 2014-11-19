@@ -51,8 +51,8 @@
 
 -spec idle_connection_count(connection_queue_name()) -> max_connections().
 %% @doc Get the current number of Cassandra Connections in the elysium_serial_queue.
-idle_connection_count(_Connection_Queue) ->
-    elysium_serial_queue:num_entries(elysium_serial_sessions).
+idle_connection_count(Connection_Queue) ->
+    elysium_serial_queue:num_entries(Connection_Queue).
 
 -spec checkin_connection(connection_queue_name(), cassandra_connection()) -> max_connections().
 %% @doc Add free connection to the end of serial queue.
@@ -77,8 +77,8 @@ checkout_connection_error(_Config, ?MODULE, Connection_Queue, Error) ->
 
 -spec pending_request_count(requests_queue_name()) -> pending_count().
 %% @doc Get the current number of Pending Requests in the elysium_serial_queue.
-pending_request_count(_Pending_Queue) ->
-    elysium_serial_queue:num_entries(elysium_serial_pendings).
+pending_request_count(Pending_Queue) ->
+    elysium_serial_queue:num_entries(Pending_Queue).
 
 -spec checkin_pending_request(requests_queue_name(), reference(), erlang:timestamp()) -> pending_count().
 %% @doc Put the Pending Request at the end of the elysium_serial_queue and return the new size.

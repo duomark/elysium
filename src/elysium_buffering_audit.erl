@@ -87,7 +87,7 @@ audit_count_init(Config, BS_Module) ->
     true = ets:insert_new(Audit_Name, #elysium_audit_counts{count_type_key=Audit_Key}).
 
 audit_count(Config, BS_Module, Type) ->
-    Audit_Key   = {?MODULE, counts},
+    Audit_Key   = {BS_Module, counts},
     Audit_Name  = elysium_config:audit_ets_name(Config),
     case Type of
         pending_dead      -> count(Audit_Name, Audit_Key, #elysium_audit_counts.pending_dead     );
