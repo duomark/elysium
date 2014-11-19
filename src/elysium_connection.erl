@@ -45,6 +45,7 @@
          start_link/1,
          start_link/2,
          stop/1,
+         one_shot_query/4,
          get_buffer_strategy_module/1,
          with_connection/4,
          with_connection/5
@@ -85,6 +86,94 @@ start_link(Config, restart) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
     start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
+
+-spec stop(connection_id()) -> ok.
+%% @doc Stop an existing seestar_session.
+stop(Connection_Id)
+  when is_pid(Connection_Id) ->
+    seestar_session:stop(Connection_Id).
+
+-spec one_shot_query(config_type(), cassandra_node(), Query::string(), ssestar:consistency())
+                    -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
+%% @doc Connect, execute raw CQL and close a connection to Cassandra.
+one_shot_query(Config, {Host, Port} = _Node, Query, Consistency)
+  when is_list(Host), is_integer(Port), Port > 0 ->
+    case get_one_shot_connection(Config, Host, Port) of
+        {ok, Connection_Id} ->
+            try   seestar_session:perform(Connection_Id, Query, Consistency)
+            after stop(Connection_Id)
+            end
+        end.
+
+-spec get_buffer_strategy_module(config_type()) -> {buffering(), buffering_strategy_module()}.
+%% @doc Get the module corresponding to the configured buffering strategy.
+get_buffer_strategy_module(Config) ->
+    true = elysium_config:is_valid_config(Config),
+    Buffering_Strategy = elysium_config:connection_buffering_strategy(Config),
+    BS_Module = case Buffering_Strategy of
+                    none     -> elysium_nobs;
+                    parallel -> elysium_bs_parallel;
+                    serial   -> elysium_bs_serial
+                end,
+    {Buffering_Strategy, BS_Module}.
+
+-spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency)
+                     -> {error, no_db_connections}
+                            | Result when Args        :: [any()],
+                                          Consist     :: seestar:consistency(),
+                                          Consistency :: seestar:consistency(),
+                                          Result      :: any().
+%% @doc
+%%   Obtain an active seestar_session and use it solely
+%%   for the duration required to execute a fun which
+%%   requires access to Cassandra.
+%% @end
+with_connection(Config, Session_Fun, Args, Consistency)
+  when is_function(Session_Fun, 3), is_list(Args) ->
+    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
+    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
+        none_available ->
+            buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
+        {Node, Sid} when is_pid(Sid) ->
+            case is_process_alive(Sid) of
+                false -> with_connection(Config, Session_Fun, Args, Consistency);
+                true  -> Reply_Timeout = elysium_config:request_reply_timeout(Config),
+                         Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
+                         Reply = elysium_buffering_strategy:handle_pending_request
+                                   (Config, BS_Module, 0, Reply_Timeout, Node, Sid, Query_Request),
+                         handle_bare_fun_reply(Buffering_Strategy, Reply, ?MODULE, with_connection, Args)
+            end
+    end.
+
+-spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
+                     -> {error, no_db_connections} | any().
+%% @doc
+%%   Obtain an active seestar_session and use it solely
+%%   for the duration required to execute Mod:Fun
+%%   which requires access to Cassandra.
+%% @end
+with_connection(Config, Mod, Fun, Args, Consistency)
+  when is_atom(Mod), is_atom(Fun), is_list(Args) ->
+    true = erlang:function_exported(Mod, Fun, 3),
+    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
+    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
+        none_available ->
+            buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
+        {Node, Sid} when is_pid(Sid) ->
+            case is_process_alive(Sid) of
+                false -> with_connection(Config, Mod, Fun, Args, Consistency);
+                true  -> Reply_Timeout = elysium_config:request_reply_timeout(Config),
+                         Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
+                         Reply = elysium_buffering_strategy:handle_pending_request
+                                   (Config, BS_Module, 0, Reply_Timeout, Node, Sid, Query_Request),
+                         handle_mod_fun_reply(Buffering_Strategy, Reply, Mod, Fun, Args)
+            end
+    end.
+
+
+%%%-----------------------------------------------------------------------
+%%% Internal connection support functions
+%%%-----------------------------------------------------------------------
 
 start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections)
   when Times_Tried >= Max_Retries ->
@@ -130,8 +219,8 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
             start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
-    catch Error:Class ->
-            Node_Failure = {Node, {Error, Class}},
+    catch Err:Class ->
+            Node_Failure = {Node, {Err, Class}},
             start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1,
                           [Node_Failure | Attempted_Connections])
 
@@ -139,52 +228,23 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
     after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
     end.
 
--spec stop(pid()) -> ok.
-%% @doc Stop an existing seestar_session.
-stop(Session_Id)
-  when is_pid(Session_Id) ->
-    seestar_session:stop(Session_Id).
-
--spec get_buffer_strategy_module(config_type()) -> {buffering(), module()}.
-%% @doc Get the module corresponding to the configured buffering strategy.
-get_buffer_strategy_module(Config) ->
-    true = elysium_config:is_valid_config(Config),
-    Buffering_Strategy = elysium_config:connection_buffering_strategy(Config),
-    BS_Module = case Buffering_Strategy of
-                    none     -> elysium_nobs;
-                    parallel -> elysium_bs_parallel;
-                    serial   -> elysium_bs_serial
-                end,
-    {Buffering_Strategy, BS_Module}.
-
-
--spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency)
-                     -> {error, no_db_connections}
-                            | Result when Args        :: [any()],
-                                          Consist     :: seestar:consistency(),
-                                          Consistency :: seestar:consistency(),
-                                          Result      :: any().
-%% @doc
-%%   Obtain an active seestar_session and use it solely
-%%   for the duration required to execute a fun which
-%%   requires access to Cassandra.
-%% @end
-with_connection(Config, Session_Fun, Args, Consistency)
-  when is_function(Session_Fun, 3), is_list(Args) ->
-    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
-    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
-        none_available ->
-            buffer_bare_fun_call(Config, Session_Fun, Args, Consistency, Buffering_Strategy);
-        {Node, Sid} when is_pid(Sid) ->
-            case is_process_alive(Sid) of
-                false -> with_connection(Config, Session_Fun, Args, Consistency);
-                true  -> Reply_Timeout = elysium_config:request_reply_timeout(Config),
-                         Query_Request = {bare_fun, Config, Session_Fun, Args, Consistency},
-                         Reply = elysium_buffering_strategy:handle_pending_request
-                                   (Config, BS_Module, 0, Reply_Timeout, Node, Sid, Query_Request),
-                         handle_bare_fun_reply(Buffering_Strategy, Reply, ?MODULE, with_connection, Args)
-            end
+-spec get_one_shot_connection(config_type(), string(), pos_integer()) -> {ok, connection_id()} | any().
+get_one_shot_connection(Config, Host, Port) ->
+    Connect_Timeout  = elysium_config:connect_timeout (Config),
+    try seestar_session:start_link(Host, Port,
+                                   [
+                                    %% {send_timeout,       Send_Timeout}
+                                   ],
+                                   [{connect_timeout, Connect_Timeout}]) of
+        {ok, Connection_Id} = Connection when is_pid(Connection_Id) -> Connection;
+        Error       -> Error
+    catch Err:Class -> {Err, Class}
     end.
+
+
+%%%-----------------------------------------------------------------------
+%%% Internal with_connection support functions
+%%%-----------------------------------------------------------------------
 
 buffer_bare_fun_call(_Config, _Session_Fun, _Args, _Consistency, none) -> {error, no_db_connections};
 buffer_bare_fun_call( Config,  Session_Fun,  Args,  Consistency, Type) ->
@@ -211,32 +271,6 @@ handle_bare_fun_reply(serial, {Err_Type, _Err_Data} = Error, Mod, Fun, Args)
     report_error(Error, Mod, Fun, Args);
 handle_bare_fun_reply(_Buffering_Strategy, Reply, _Mod, _Fun, _Args) ->
     Reply.
-
-
--spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
-                     -> {error, no_db_connections} | any().
-%% @doc
-%%   Obtain an active seestar_session and use it solely
-%%   for the duration required to execute Mod:Fun
-%%   which requires access to Cassandra.
-%% @end
-with_connection(Config, Mod, Fun, Args, Consistency)
-  when is_atom(Mod), is_atom(Fun), is_list(Args) ->
-    true = erlang:function_exported(Mod, Fun, 3),
-    {Buffering_Strategy, BS_Module} = get_buffer_strategy_module(Config),
-    case elysium_buffering_strategy:checkout_connection(Config, BS_Module) of
-        none_available ->
-            buffer_mod_fun_call(Config, Mod, Fun, Args, Consistency, Buffering_Strategy);
-        {Node, Sid} when is_pid(Sid) ->
-            case is_process_alive(Sid) of
-                false -> with_connection(Config, Mod, Fun, Args, Consistency);
-                true  -> Reply_Timeout = elysium_config:request_reply_timeout(Config),
-                         Query_Request = {mod_fun, Config, Mod, Fun, Args, Consistency},
-                         Reply = elysium_buffering_strategy:handle_pending_request
-                                   (Config, BS_Module, 0, Reply_Timeout, Node, Sid, Query_Request),
-                         handle_mod_fun_reply(Buffering_Strategy, Reply, Mod, Fun, Args)
-            end
-    end.
 
 buffer_mod_fun_call(_Config, _Mod, _Fun, _Args, _Consistency,     none) -> {error, no_db_connections};
 buffer_mod_fun_call( Config,  Mod,  Fun,  Args,  Consistency, parallel) ->
