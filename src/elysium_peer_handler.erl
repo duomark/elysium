@@ -37,9 +37,9 @@ start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, [
 %% @doc Returns the list of nodes, this is updated every minute
 get_nodes() -> gen_server:call(?MODULE, {get_nodes}).
 
--spec update_nodes() -> [binary()].
+-spec update_nodes() -> ok.
 %% @doc Updates the node list, it is automatically called, but can be manually invoked
-update_nodes() -> gen_server:call(?MODULE, {update_nodes}).
+update_nodes() -> gen_server:cast(?MODULE, {update_nodes}).
 
 -spec update_config(config_type()) -> [binary()].
 %% @doc Updates the configuration used when re requesting the nodes
@@ -51,19 +51,11 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 
 -spec init(config_type()) -> {ok, #state{}}.
 
-init(Config) -> update_nodes(Config, self()), {ok, #state{config = Config}}.
+init(Config) -> update_nodes(), {ok, #state{config = Config}}.
 terminate(_Reason, _St) -> ok.
 
 handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
     {reply, Nodes, St};
-handle_call({update_nodes}, _From, #state{config = Config, timer = Timer} = St) ->
-    {ok, _Status} = case Timer of
-                        undefined -> {ok, no_timer};
-                        TRef      -> timer:cancel(TRef)
-                    end,
-    ok = update_nodes(Config, self()),
-    New_Timer = timer:apply_after(timeout(Config), ?MODULE, update_nodes, []),
-    {reply, ok, St#state{timer = New_Timer}};
 handle_call({update_config, New_Config}, _From, St) ->
     {reply, ok, St#state{config = New_Config}}.
 
@@ -74,9 +66,16 @@ handle_info({update_nodes, New_Nodes}, #state{nodes = Old_Nodes} = St) ->
               {noreply, New_State}
     end.
 
-%% Unused callbacks
+handle_cast({update_nodes}, #state{config = Config, timer = Timer} = St) ->
+    {ok, _Status} = case timer:cancel(Timer) of
+                        {error, _} -> {ok, no_timer};
+                        Success    -> Success
+                    end,
+    ok = update_nodes(Config, self()),
+    New_Timer = timer:apply_after(timeout(Config), ?MODULE, update_nodes, []),
+    {noreply, St#state{timer = New_Timer}}.
 
-handle_cast(Request, St) -> {stop, {unexpected_cast, Request}, St}.
+%% Unused callbacks
 
 code_change(_OldVsn, St, _Extra) -> {ok, St}.
 
