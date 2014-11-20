@@ -82,13 +82,13 @@ cassandra_send_timeout() -> 1000.
      
 -spec cassandra_max_sessions() -> max_sessions().
 %% @doc Allow a max of 16 simultaneous live Cassandra sessions.
-cassandra_max_sessions() -> 5.
+cassandra_max_sessions() -> 3.
 
 -spec cassandra_max_checkout_retry() -> max_retries().
 %% @doc Retry up to 20 times when session queue races occur.
-cassandra_max_checkout_retry() -> 3.
+cassandra_max_checkout_retry() -> 5.
 
 -spec cassandra_session_decay_probability() -> decay_prob().
-%% @doc Kill a live session 1000 out of 1M times it is used.
-cassandra_session_decay_probability() -> 1000.
+%% @doc Kill a live session 100000 out of 1B times it is used.
+cassandra_session_decay_probability() -> 100000.
     

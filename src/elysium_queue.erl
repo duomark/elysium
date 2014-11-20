@@ -190,9 +190,11 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
 ?inactive(activate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Sessions = elysium_config:session_max_count(Config),
+    Max_Sessions  = elysium_config:session_max_count   (Config),
+    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
+    Num_Nodes     = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
     _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Sessions)],
+         || _N <- lists:seq(1, Max_Sessions * Num_Nodes)],
     {reply, Max_Sessions, ?active, State};
 ?inactive(_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?inactive, State}.
@@ -227,9 +229,11 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Activate if requested, from the 'INACTIVE' state.
 ?inactive(activate, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Sessions = elysium_config:session_max_count(Config),
+    Max_Sessions  = elysium_config:session_max_count   (Config),
+    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
+    Num_Nodes     = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
     _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Sessions)],
+         || _N <- lists:seq(1, Max_Sessions * Num_Nodes)],
     {next_state, ?active, State};
 ?inactive(_Other, #ef_state{} = State) ->
     {next_state, ?inactive, State}.
