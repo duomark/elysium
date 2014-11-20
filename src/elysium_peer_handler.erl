@@ -90,24 +90,28 @@ update_nodes(Config, Pid) ->
 
 update_nodes_async(Config, Pid) ->
     % Get Host and port
-    Hostname = elysium_config:seed_node(Config),
-    [HostBin, PortBin] = binary:split(Hostname, <<":">>),
-    Host = {binary_to_list(HostBin), binary_to_integer(PortBin)},
+    HostBin = elysium_config:seed_node(Config),
+    Host = to_host_port(HostBin),
     % Open the channel, send the request and close it
     Query = <<"SELECT peer, tokens FROM system.peers;">>,
-    lager:info("requesting peers to ~p (~p)", [Hostname, Host]),
+    lager:info("requesting peers to ~p (~p)", [HostBin, Host]),
     case elysium_connection:one_shot_query(Config, Host, Query, one) of
         {error, _Error} -> lager:error("~p", [_Error]), ok;
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
-                                    Pid ! {update_nodes, [Hostname | Rows]}
+                                    Pid ! {update_nodes, [HostBin | Rows]}
     end.
 
 timeout(Config) ->
     elysium_config:request_peers_timeout(Config).
 
 handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = _Config} = St) ->
-    case (New_Nodes -- Old_Nodes) ++ (Old_Nodes -- New_Nodes) of
-        [] -> same_nodes;
-        _  -> new_nodes
-    end,
+    ok = case (New_Nodes -- Old_Nodes) ++ (Old_Nodes -- New_Nodes) of
+             [] -> ok;
+             _  -> Formatted_Nodes = [to_host_port(N) || N <- New_Nodes],
+                   elysium_queue:node_change(Formatted_Nodes)
+         end,
     St#state{nodes = New_Nodes}.
+
+to_host_port(Bin) ->
+    [HostBin, PortBin] = binary:split(Bin, <<":">>),
+    {binary_to_list(HostBin), binary_to_integer(PortBin)}.
