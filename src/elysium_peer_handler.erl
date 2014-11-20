@@ -72,7 +72,7 @@ handle_cast({update_nodes}, #state{config = Config, timer = Timer} = St) ->
                         Success    -> Success
                     end,
     ok = update_nodes(Config, self()),
-    New_Timer = timer:apply_after(timeout(Config), ?MODULE, update_nodes, []),
+    {ok, New_Timer} = timer:apply_after(timeout(Config), ?MODULE, update_nodes, []),
     {noreply, St#state{timer = New_Timer}}.
 
 %% Unused callbacks
@@ -105,7 +105,9 @@ update_nodes_async(Config, Pid) ->
 timeout(Config) ->
     elysium_config:request_peers_timeout(Config).
 
-handle_node_change(Nodes, #state{nodes = Nodes, config = _Config} = St) ->
-    St;
-handle_node_change(New_Nodes, #state{nodes = _Old_Nodes, config = _Config} = St) ->
+handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = _Config} = St) ->
+    case (New_Nodes -- Old_Nodes) ++ (Old_Nodes -- New_Nodes) of
+        [] -> same_nodes;
+        _  -> new_nodes
+    end,
     St#state{nodes = New_Nodes}.
