@@ -20,9 +20,10 @@
 -include_lib("seestar/src/seestar_messages.hrl").
 
 -record(state, {
-          nodes = []         :: [cassandra_node()],
-          config = undefined :: undefined | config_type(),
-          timer = undefined  :: undefined | timer:tref()
+          nodes = []               :: [cassandra_node()],
+          config = undefined       :: undefined | config_type(),
+          timer = undefined        :: undefined | timer:tref(),
+          curr_request = undefined :: undefined | pid()
          }).
 
 %% -------------------------------------------------------------------------
@@ -51,7 +52,9 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 
 -spec init(config_type()) -> {ok, #state{}}.
 
-init(Config) -> update_nodes(), {ok, #state{config = Config}}.
+init(Config) -> update_nodes(),
+                {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
+                {ok, #state{config = Config, timer = Timer}}.
 terminate(_Reason, _St) -> ok.
 
 handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
@@ -59,21 +62,20 @@ handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
 handle_call({update_config, New_Config}, _From, St) ->
     {reply, ok, St#state{config = New_Config}}.
 
-handle_info({update_nodes, New_Nodes}, #state{nodes = Old_Nodes} = St) ->
-    case New_Nodes -- Old_Nodes of
-        [] -> {noreply, St};
-        _  -> New_State = handle_node_change(New_Nodes, St),
-              {noreply, New_State}
-    end.
+handle_info({update_nodes, Caller, New_Nodes}, #state{curr_request = Caller} = St) ->
+    New_State = handle_node_change(New_Nodes, St),
+    {noreply, New_State#state{curr_request = undefined}};
+handle_info({'DOWN', _, _, _, normal}, St) ->
+    {noreply, ok, St};
+handle_info({'DOWN', Ref, _, _, _}, #state{curr_request = Ref} = St) ->
+    {noreply, ok, St#state{curr_request = undefined}}.
 
-handle_cast({update_nodes}, #state{config = Config, timer = Timer} = St) ->
-    {ok, _Status} = case timer:cancel(Timer) of
-                        {error, _} -> {ok, no_timer};
-                        Success    -> Success
-                    end,
-    ok = update_nodes(Config, self()),
-    {ok, New_Timer} = timer:apply_after(timeout(Config), ?MODULE, update_nodes, []),
-    {noreply, St#state{timer = New_Timer}}.
+handle_cast({update_nodes}, #state{curr_request = undefined, config = Config} = St) ->
+    Pid = self(),
+    Curr_Request = spawn_link(fun() -> update_nodes(Config, Pid) end),
+    {noreply, St#state{curr_request = Curr_Request}};
+handle_cast({update_nodes}, St) ->
+    {noreply, St}.
 
 %% Unused callbacks
 
@@ -84,18 +86,15 @@ code_change(_OldVsn, St, _Extra) -> {ok, St}.
 %% -------------------------------------------------------------------------
 
 update_nodes(Config, Pid) ->
-    _Pid = spawn(fun() -> update_nodes_async(Config, Pid) end),
-    ok.
-
-update_nodes_async(Config, Pid) ->
     Host = elysium_config:seed_node(Config),
     Query = <<"SELECT peer, tokens FROM system.peers;">>,
     lager:info("requesting peers to ~p", [Host]),
     case elysium_connection:one_shot_query(Config, Host, Query, one, trunc(timeout(Config) * 0.9)) of
-        {error, _Error} -> lager:error("~p", [_Error]), ok;
+        {error, _Error} -> lager:error("~p", [_Error]);
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
                                     Nodes = [to_host_port(N) || N <- Rows],
-                                    Pid ! {update_nodes, [Host | Nodes]}
+                                    Pid ! {update_nodes, self, [Host | Nodes]},
+                                    ok
     end.
 
 timeout(Config) ->
