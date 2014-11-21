@@ -64,7 +64,7 @@
 -record(ef_state, {
           config          :: config_type(),
           available_hosts :: lb_queue_name(),
-          live_sessions   :: session_queue_name(),
+          live_sessions   :: connection_queue_name(),
           requests        :: requests_queue_name(),
           connection_sup  :: pid()
          }).
@@ -92,12 +92,12 @@ register_connection_supervisor(Connection_Sup)
 get_connection_supervisor() ->
     gen_fsm:sync_send_all_state_event(?SERVER, get_connection_supervisor).
 
--spec activate() -> Max_Allowed::max_sessions().
+-spec activate() -> Max_Allowed::max_connections().
 %% @doc Change to the active state, creating new Cassandra sessions.
 activate() ->
     gen_fsm:sync_send_event(?SERVER, activate).
 
--spec deactivate() -> {Num_Terminated::max_sessions(), Max_Allowed::max_sessions()}.
+-spec deactivate() -> {Num_Terminated::max_connections(), Max_Allowed::max_connections()}.
 %% @doc Change to the inactive state, deleting Cassandra sessions.
 deactivate() ->
     gen_fsm:sync_send_event(?SERVER, deactivate).
@@ -171,10 +171,10 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Move to 'INACTIVE' if requested, otherwise stay in 'ACTIVE' state.
 ?active(deactivate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Sessions = elysium_config:session_max_count(Config),
+    Max_Connections = elysium_config:session_max_count(Config),
     Kids = supervisor:which_children(Conn_Sup),
     _ = [supervisor:terminate_child(Conn_Sup, Pid) || {undefined, Pid, _, _} <- Kids],
-    {reply, {length(Kids), Max_Sessions}, ?inactive, #ef_state{} = State};
+    {reply, {length(Kids), Max_Connections}, ?inactive, #ef_state{} = State};
 ?active  (_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?active, State}.
 
@@ -186,16 +186,16 @@ terminate(Reason, _State_Name,
 ?disabled(_Any,   _From, #ef_state{} = State) -> {reply, disabled, ?disabled, State}.
 
 -spec ?inactive(activate, {pid(), reference()}, State)
-              -> {reply, max_sessions(), ?active, State} when State :: #ef_state{}.
+              -> {reply, max_connections(), ?active, State} when State :: #ef_state{}.
 %% @private
 %% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
 ?inactive(activate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Sessions  = elysium_config:session_max_count   (Config),
-    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
-    Num_Nodes     = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
+    Max_Connections = elysium_config:session_max_count   (Config),
+    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
+    Num_Nodes       = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
     _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Sessions * Num_Nodes)],
-    {reply, Max_Sessions, ?active, State};
+         || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
+    {reply, Max_Connections, ?active, State};
 ?inactive(_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?inactive, State}.
 
@@ -229,11 +229,11 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Activate if requested, from the 'INACTIVE' state.
 ?inactive(activate, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Sessions  = elysium_config:session_max_count   (Config),
-    Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
-    Num_Nodes     = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
+    Max_Connections = elysium_config:session_max_count   (Config),
+    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
+    Num_Nodes       = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
     _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Sessions * Num_Nodes)],
+         || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
     {next_state, ?active, State};
 ?inactive(_Other, #ef_state{} = State) ->
     {next_state, ?inactive, State}.

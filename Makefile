@@ -13,6 +13,7 @@ dep_test_commons = git https://github.com/tigertext/test_commons master
 PLATFORM_OPTS := `erlc -o ebin src/elysium_compile_utils.erl ; erl -noshell -pa ebin -s elysium_compile_utils platform_opts -s init stop`
 
 ERLC_OPTS := +debug_info +"{cover_enabled, true}" ${PLATFORM_OPTS}
+COMPILE_FIRST := elysium_buffering_audit elysium_buffering_strategy
 
 # Needed for testing
 TEST_ERLC_OPTS := -I include $(ERLC_OPTS)

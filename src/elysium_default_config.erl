@@ -16,6 +16,8 @@
 -module(elysium_default_config).
 -author('jay@duomark.com').
 
+-behaviour(elysium_config).
+
 -export([
          is_elysium_enabled/0,
          cassandra_lb_queue/0,
@@ -33,7 +35,6 @@
          cassandra_session_decay_probability/0
         ]).
 
--behaviour(elysium_config).
 -include("elysium_types.hrl").
 
 -spec is_elysium_enabled() -> boolean().
@@ -52,8 +53,8 @@ cassandra_connection_bs() -> parallel.
 %% @doc Using ets table 'elysium_audit'.
 cassandra_audit_ets() -> elysium_audit.
 
--spec cassandra_session_queue() -> session_queue_name().
-%% @doc Using session queue 'elysium_connection_queue'.
+-spec cassandra_session_queue() -> connection_queue_name().
+%% @doc Using connection queue 'elysium_connection_queue'.
 cassandra_session_queue() -> elysium_connection_queue.
 
 -spec cassandra_requests_queue() -> requests_queue_name().
@@ -80,7 +81,7 @@ cassandra_connect_timeout() -> 50.
 %% @doc Timeout when sending requests to Cassandra.
 cassandra_send_timeout() -> 1000.
      
--spec cassandra_max_sessions() -> max_sessions().
+-spec cassandra_max_sessions() -> max_connections().
 %% @doc Allow a max of 16 simultaneous live Cassandra sessions.
 cassandra_max_sessions() -> 3.
 
@@ -89,6 +90,6 @@ cassandra_max_sessions() -> 3.
 cassandra_max_checkout_retry() -> 5.
 
 -spec cassandra_session_decay_probability() -> decay_prob().
-%% @doc Kill a live session 100000 out of 1B times it is used.
+%% @doc Kill a live session 100,000 out of 1 Billion times it is used.
 cassandra_session_decay_probability() -> 100000.
     
