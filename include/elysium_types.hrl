@@ -13,7 +13,7 @@
 
 -type audit_ets_name()         :: atom().          % Audit ets table for telemetry data
 
--type cassandra_node()   :: {Ip_Or_Hostname::string(), Port::pos_integer()}.   % Cassandra node
+-type cassandra_node()   :: {Ip_Or_Hostname::inet:hostname(), Port::inet:port_number()}.   % Cassandra node
 -type host_list()        :: [cassandra_node()].    % Host list used by load balancer
 
 -type timeout_in_ms()    :: pos_integer().         % In milliseconds
