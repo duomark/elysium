@@ -20,7 +20,7 @@
 -include_lib("seestar/src/seestar_messages.hrl").
 
 -record(state, {
-          nodes = []         :: [binary()],
+          nodes = []         :: [cassandra_node()],
           config = undefined :: undefined | config_type(),
           timer = undefined  :: undefined | timer:tref()
          }).
@@ -33,7 +33,7 @@
 %% @doc 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
 
--spec get_nodes() -> [binary()].
+-spec get_nodes() -> [cassandra_node()].
 %% @doc Returns the list of nodes, this is updated every minute
 get_nodes() -> gen_server:call(?MODULE, {get_nodes}).
 
@@ -89,28 +89,27 @@ update_nodes(Config, Pid) ->
     ok.
 
 update_nodes_async(Config, Pid) ->
-    % Get Host and port
-    HostBin = elysium_config:seed_node(Config),
-    Host = to_host_port(HostBin),
-    % Open the channel, send the request and close it
+    Host = elysium_config:seed_node(Config),
     Query = <<"SELECT peer, tokens FROM system.peers;">>,
-    lager:info("requesting peers to ~p (~p)", [HostBin, Host]),
+    lager:info("requesting peers to ~p", [Host]),
     case elysium_connection:one_shot_query(Config, Host, Query, one) of
         {error, _Error} -> lager:error("~p", [_Error]), ok;
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
-                                    Pid ! {update_nodes, [HostBin | Rows]}
+                                    Nodes = [to_host_port(N) || N <- Rows],
+                                    Pid ! {update_nodes, [Host | Nodes]}
     end.
 
 timeout(Config) ->
     elysium_config:request_peers_timeout(Config).
 
 handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = _Config} = St) ->
-    ok = case (New_Nodes -- Old_Nodes) ++ (Old_Nodes -- New_Nodes) of
-             [] -> ok;
-             _  -> Formatted_Nodes = [to_host_port(N) || N <- New_Nodes],
-                   elysium_queue:node_change(Formatted_Nodes)
-         end,
-    St#state{nodes = New_Nodes}.
+    New_Nodes_Set = ordset:from_list(New_Nodes),
+    Old_Nodes_Set = ordset:from_list(Old_Nodes),
+    ok = case ordsets:substract(New_Nodes_Set, Old_Nodes_Set) of
+             [] -> St;
+             _  -> elysium_queue:node_change(New_Nodes),
+                   St#state{nodes = New_Nodes}
+         end.
 
 to_host_port(Bin) ->
     [HostBin, PortBin] = binary:split(Bin, <<":">>),

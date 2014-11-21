@@ -162,7 +162,7 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
                     Audit_Ets_Name, Connection_Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
-                    Max_Connections, Max_Retries, Decay_Prob, Seed_Node,
+                    Max_Connections, Max_Retries, Decay_Prob, {Host, Port} = Seed_Node,
                     Request_Peers_Timeout_Millis)
  when is_atom(Buffering_Strategy),
       is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
@@ -175,11 +175,12 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
       is_integer(Max_Connections),        Max_Connections   > 0,
       is_integer(Max_Retries),            Max_Retries   >= 0,
       is_integer(Decay_Prob),             Decay_Prob    >= 0, Decay_Prob =< 1000000,
-      is_binary(Seed_Node),
+      is_list(Host),
+      is_integer(Port),                   Port          >= 0,
       is_integer(Request_Peers_Timeout_Millis), Request_Peers_Timeout_Millis > 0 ->
 
     Props = [
-             {<<"is_elysium_enabled">>,                   boolean_to_binary(Enabled)},
+             {<<"is_elysium_enabled">>,                   boolean_to_binary (Enabled)},
              {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,         utf8)},
              {<<"cassandra_connection_bs">>,              atom_to_binary    (Buffering_Strategy,    utf8)},
              {<<"cassandra_audit_ets">>,                  atom_to_binary    (Audit_Ets_Name,        utf8)},
@@ -193,7 +194,7 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
              {<<"cassandra_send_timeout">>,               integer_to_binary (Send_Timeout_Millis)},
              {<<"cassandra_max_checkout_retry">>,         integer_to_binary (Max_Retries)},
              {<<"cassandra_session_decay_probability">>,  integer_to_binary (Decay_Prob)},
-             {<<"cassandra_seed_node">>,                                     Seed_Node},
+             {<<"cassandra_seed_node">>,                  term_to_binary    (Seed_Node)},
              {<<"cassandra_request_peers_timeout">>,      integer_to_binary (Request_Peers_Timeout_Millis)}
             ],
     {vbisect, vbisect:from_list(Props)}.
@@ -294,11 +295,11 @@ decay_probability  ({config_mod,  Config_Module}) -> Config_Module:cassandra_ses
 decay_probability  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
--spec seed_node          (config_type()) -> binary().
+-spec seed_node          (config_type()) -> cassandra_node().
 %% @doc Get the seed seestar node from where to retrieve the list of peers.
 seed_node          ({config_mod,  Config_Module}) -> Config_Module:cassandra_seed_node();
 seed_node          ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_seed_node">>, Bindict),
-                                                     Bin_Value.
+                                                     binary_to_term(Bin_Value).
 
 -spec request_peers_timeout(config_type()) -> request_peers_timeout().
 %% @doc Get the time between consecutive seestar peers requests.
