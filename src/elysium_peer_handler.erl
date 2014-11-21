@@ -84,15 +84,14 @@ code_change(_OldVsn, St, _Extra) -> {ok, St}.
 %% -------------------------------------------------------------------------
 
 update_nodes(Config, Pid) ->
-    Fun = fun() -> update_nodes_async(Config, Pid) end,
-    timer:kill_after(max(1, timeout(Config) - 1000), spawn(Fun)),
+    _Pid = spawn(fun() -> update_nodes_async(Config, Pid) end),
     ok.
 
 update_nodes_async(Config, Pid) ->
     Host = elysium_config:seed_node(Config),
     Query = <<"SELECT peer, tokens FROM system.peers;">>,
     lager:info("requesting peers to ~p", [Host]),
-    case elysium_connection:one_shot_query(Config, Host, Query, one) of
+    case elysium_connection:one_shot_query(Config, Host, Query, one, trunc(timeout(Config) * 0.9)) of
         {error, _Error} -> lager:error("~p", [_Error]), ok;
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
                                     Nodes = [to_host_port(N) || N <- Rows],

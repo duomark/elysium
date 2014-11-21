@@ -46,6 +46,7 @@
          start_link/2,
          stop/1,
          one_shot_query/4,
+         one_shot_query/5,
          get_buffer_strategy_module/1,
          with_connection/4,
          with_connection/5
@@ -96,7 +97,13 @@ stop(Connection_Id)
 -spec one_shot_query(config_type(), cassandra_node(), Query::string(), ssestar:consistency())
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra.
-one_shot_query(Config, {Host, Port} = _Node, Query, Consistency)
+one_shot_query(Config, Node, Query, Consistency) ->
+    one_shot_query(Config, Node, Query, Consistency, infinity).
+
+-spec one_shot_query(config_type(), cassandra_node(), Query::string(), ssestar:consistency(), pos_integer() | infinity)
+                    -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
+%% @doc Connect, execute raw CQL and close a connection to Cassandra with a timeout (in ms).
+one_shot_query(Config, {Host, Port} = _Node, Query, Consistency, _Reply_Timeout)
   when is_list(Host), is_integer(Port), Port > 0 ->
     case get_one_shot_connection(Config, Host, Port) of
         {ok, Connection_Id} ->
