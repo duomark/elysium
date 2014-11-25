@@ -20,7 +20,7 @@
 -type max_retries()      :: non_neg_integer().
 -type decay_prob()       :: non_neg_integer().     % Chances in 1B of connection death
 
--type request_peers_timeout() :: pos_integer().    %% in milliseconds
+-type request_peers_frequency() :: timeout_in_ms().
 
 %% Currently Cassandra connections are seestar_sessions.
 -type connection_id() :: pid().                    % Live process holding socket to Cassandra.

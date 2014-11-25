@@ -34,7 +34,8 @@
          cassandra_max_checkout_retry/0,
          cassandra_session_decay_probability/0,
          cassandra_seed_node/0,
-         cassandra_request_peers_timeout/0
+         cassandra_request_peers_frequency/0,
+         cassandra_default_port/0
         ]).
 
 -include("elysium_types.hrl").
@@ -69,7 +70,7 @@ cassandra_request_reply_timeout() -> 5000.
 
 -spec cassandra_hosts() -> host_list().
 %% @doc Only local host: [{"127.0.0.1", 9042}].
-cassandra_hosts() -> [{"127.0.0.1", 9042}].
+cassandra_hosts() -> [{"127.0.0.1", cassandra_default_port()}].
 
 -spec cassandra_max_restart_delay() -> timeout_in_ms().
 %% @doc Randomly delay connect from 1-100 milliseconds on startup.
@@ -96,9 +97,16 @@ cassandra_max_checkout_retry() -> 5.
 cassandra_session_decay_probability() -> 100000.
     
 -spec cassandra_seed_node() -> cassandra_node().
-%% @doc The node where elysium requests the full c* node list. There is no default seed node, hence the non-routable address.
+%% @doc 
+%%  The node where elysium requests the full c* node list.
+%%  There is no default seed node, hence the non-routable address.
+%% @end
 cassandra_seed_node() -> {"0.0.0.0", 0}.
 
--spec cassandra_request_peers_timeout() -> request_peers_timeout().
+-spec cassandra_request_peers_frequency() -> request_peers_frequency().
 %% @doc Check for seestar nodes once a minute
-cassandra_request_peers_timeout() -> 60000.
+cassandra_request_peers_frequency() -> 60000.
+
+-spec cassandra_default_port() -> inet:port_number().
+%% @doc The default port for elysium requests
+cassandra_default_port() -> 9042.

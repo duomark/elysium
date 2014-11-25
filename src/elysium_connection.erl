@@ -104,7 +104,9 @@ one_shot_query(Config, Node, Query, Consistency) ->
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra with a timeout (in ms).
 one_shot_query(Config, {Host, Port} = _Node, Query, Consistency, _Reply_Timeout)
-  when is_list(Host), is_integer(Port), Port > 0 ->
+  when is_list(Host),
+       is_integer(Port), Port > 0,
+       is_integer(_Reply_Timeout), _Reply_Timeout > 0 ->
     case get_one_shot_connection(Config, Host, Port) of
         {ok, Connection_Id} ->
             try   seestar_session:perform(Connection_Id, Query, Consistency)
