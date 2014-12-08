@@ -21,3 +21,4 @@ relx
 *.swp
 erl_crash.dump
 .erlang.mk.packages.*
+.rebar

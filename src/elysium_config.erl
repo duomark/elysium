@@ -67,7 +67,7 @@
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
-         make_vbisect_config/14,
+         make_vbisect_config/17,
 
          is_elysium_config_enabled/1,
          load_balancer_queue/1,
@@ -82,7 +82,10 @@
          send_timeout/1,
          session_max_count/1,
          checkout_max_retry/1,
-         decay_probability/1
+         decay_probability/1,
+         seed_node/1,
+         request_peers_frequency/1,
+         default_port/1
         ]).
 
 -include("elysium_types.hrl").
@@ -150,7 +153,8 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
 -spec make_vbisect_config(boolean(), lb_queue_name(), elysium_connection:buffering(),
                           audit_ets_name(), connection_queue_name(), requests_queue_name(),
                           timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(), timeout_in_ms(),
-                          max_connections(), max_retries(), decay_prob()) -> {vbisect, vbisect:bindict()}.
+                          max_connections(), max_retries(), decay_prob(),
+                          binary(), request_peers_frequency(), inet:port_number()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
@@ -159,8 +163,8 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
                     Audit_Ets_Name, Connection_Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
-                    Max_Connections, Max_Retries, Decay_Prob)
-
+                    Max_Connections, Max_Retries, Decay_Prob, {Host, Port} = Seed_Node,
+                    Request_Peers_Frequency_Millis, Default_Port)
  when is_atom(Buffering_Strategy),
       is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
       is_atom(Connection_Queue_Name),     is_atom(Requests_Queue_Name),
@@ -171,10 +175,14 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
       is_integer(Restart_Millis),         Restart_Millis > 0,
       is_integer(Max_Connections),        Max_Connections   > 0,
       is_integer(Max_Retries),            Max_Retries   >= 0,
-      is_integer(Decay_Prob),             Decay_Prob    >= 0, Decay_Prob =< 1000000 ->
+      is_integer(Decay_Prob),             Decay_Prob    >= 0, Decay_Prob =< 1000000,
+      is_list(Host),
+      is_integer(Port),                   Port          >= 0,
+      is_integer(Request_Peers_Frequency_Millis), Request_Peers_Frequency_Millis > 0,
+      is_integer(Default_Port), Default_Port > 0, Default_Port =< 65535 ->
 
     Props = [
-             {<<"is_elysium_enabled">>,                   boolean_to_binary(Enabled)},
+             {<<"is_elysium_enabled">>,                   boolean_to_binary (Enabled)},
              {<<"cassandra_lb_queue">>,                   atom_to_binary    (Lb_Queue_Name,         utf8)},
              {<<"cassandra_connection_bs">>,              atom_to_binary    (Buffering_Strategy,    utf8)},
              {<<"cassandra_audit_ets">>,                  atom_to_binary    (Audit_Ets_Name,        utf8)},
@@ -187,7 +195,10 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
              {<<"cassandra_connect_timeout">>,            integer_to_binary (Connect_Timeout_Millis)},
              {<<"cassandra_send_timeout">>,               integer_to_binary (Send_Timeout_Millis)},
              {<<"cassandra_max_checkout_retry">>,         integer_to_binary (Max_Retries)},
-             {<<"cassandra_session_decay_probability">>,  integer_to_binary (Decay_Prob)}
+             {<<"cassandra_session_decay_probability">>,  integer_to_binary (Decay_Prob)},
+             {<<"cassandra_seed_node">>,                  term_to_binary    (Seed_Node)},
+             {<<"cassandra_request_peers_frequency">>,    integer_to_binary (Request_Peers_Frequency_Millis)},
+             {<<"cassandra_default_port">>,               integer_to_binary (Default_Port)}
             ],
     {vbisect, vbisect:from_list(Props)}.
 
@@ -253,8 +264,8 @@ round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:f
 %%   timeout or you risk failing elysium_connection_sup on application
 %%   startup.
 %% @end
-max_restart_delay    ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_restart_delay();
-max_restart_delay    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
+max_restart_delay  ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_restart_delay();
+max_restart_delay  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
                                                      binary_to_term(Bin_Value).
 
 -spec connect_timeout  (config_type()) -> timeout_in_ms().
@@ -287,6 +298,23 @@ decay_probability  ({config_mod,  Config_Module}) -> Config_Module:cassandra_ses
 decay_probability  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
+-spec seed_node          (config_type()) -> cassandra_node().
+%% @doc Get the seed seestar node from where to retrieve the list of peers.
+seed_node          ({config_mod,  Config_Module}) -> Config_Module:cassandra_seed_node();
+seed_node          ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_seed_node">>, Bindict),
+                                                     binary_to_term(Bin_Value).
+
+-spec request_peers_frequency(config_type()) -> request_peers_frequency().
+%% @doc Get the time between consecutive seestar peers requests.
+request_peers_frequency({config_mod, Config_Module}) -> Config_Module:cassandra_request_peers_frequency();
+request_peers_frequency({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_peers_frequency">>, Bindict),
+                                                      binary_to_integer(Bin_Value).
+
+-spec default_port(config_type()) -> inet:port_number().
+%% @doc Get the default port for elysium requests
+default_port({config_mod, Config_Module})          -> Config_Module:cassandra_default_port();
+default_port({vbisect,          Bindict})          -> {ok, Bin_Value} = vbisect:find(<<"cassandra_default_port">>, Bindict),
+                                                      binary_to_integer(Bin_Value).
 
 boolean_to_binary(true)    -> <<"1">>;
 boolean_to_binary(false)   -> <<"0">>.
