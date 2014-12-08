@@ -87,7 +87,7 @@ handle_cast({update_nodes, forced}, #state{curr_request = Curr_Request, config =
     Pid = self(),
     New_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
     {noreply, St#state{curr_request = New_Request}};
-handle_cast({update_nodes}, St) ->
+handle_cast({update_nodes, _}, St) -> %% irgnore others 
     {noreply, St}.
 
 %% Unused callbacks
