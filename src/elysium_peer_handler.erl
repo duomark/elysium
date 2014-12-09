@@ -43,7 +43,7 @@ get_nodes() -> gen_server:call(?MODULE, {get_nodes}).
 update_nodes() -> update_nodes(false).
 
 -spec update_nodes(boolean()) -> ok.
-%% @doc Updates the node list, it will cancel any pending requests and start a new one
+%% @doc Updates the node list, if forced, it will cancel any pending requests and start a new one
 update_nodes(_Force = true)  -> gen_server:cast(?MODULE, {update_nodes, forced});
 update_nodes(_Force = false) -> gen_server:cast(?MODULE, {update_nodes, normal}).
 
@@ -57,26 +57,26 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 
 -spec init(config_type()) -> {ok, #state{}}.
 
-init(Config) -> update_nodes(),
-                {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
-                {ok, #state{config = Config, timer = Timer}}.
+init(Config) -> {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
+                Pid = self(),
+                Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
+                {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request}}.
 terminate(_Reason, _St) -> ok.
 
 handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
     {reply, Nodes, St};
 handle_call({update_config, New_Config}, _From, St) ->
-    lager:notice("update config called"),
     {reply, ok, St#state{config = New_Config}}.
 
 handle_info({update_nodes, Caller, New_Nodes}, #state{curr_request = Caller} = St) ->
     New_State = handle_node_change(New_Nodes, St),
     {noreply, New_State#state{curr_request = undefined}};
-handle_info({'DOWN', _, _, _, normal}, St) ->
-    {noreply, ok, St};
 handle_info({'DOWN', Ref, _, _, _}, #state{curr_request = Ref} = St) ->
-    {noreply, ok, St#state{curr_request = undefined}};
+    {noreply, St#state{curr_request = undefined}};
 handle_info({'DOWN', _, _, _, _}, St) ->
-    {noreply, ok, St}.
+    {noreply, St};
+handle_info(Whatever, St) ->
+    {noreply, St}.
 
 handle_cast({update_nodes, _}, #state{curr_request = undefined, config = Config} = St) ->
     Pid = self(),
