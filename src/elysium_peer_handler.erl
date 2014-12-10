@@ -64,7 +64,7 @@ init(Config) ->
                 {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
                 Pid = self(),
                 Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
-                {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request}}.
+                {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request, nodes=[Host]}}.
 terminate(_Reason, _St) -> ok.
 
 handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
@@ -111,7 +111,7 @@ update_nodes(Config, Pid) ->
         {ok, #rows{rows = []}}   -> lager:warning("update nodes returned empty list");
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
                                     Nodes = [to_host_port(N, Config) || N <- Rows],
-                                    Pid ! {update_nodes, self(), [Host | Nodes]},
+                                    Pid ! {update_nodes, self(), sets:to_list(sets:from_list([Host | Nodes]))},
                                     ok
     end.
 
