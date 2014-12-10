@@ -40,7 +40,7 @@ get_nodes() -> gen_server:call(?MODULE, {get_nodes}).
 
 -spec update_nodes() -> ok.
 %% @doc Updates the node list, it is automatically called, but can be manually invoked
-update_nodes() -> update_nodes(false).
+update_nodes() -> update_nodes(true).
 
 -spec update_nodes(boolean()) -> ok.
 %% @doc Updates the node list, if forced, it will cancel any pending requests and start a new one
@@ -57,7 +57,11 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 
 -spec init(config_type()) -> {ok, #state{}}.
 
-init(Config) -> {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
+init(Config) -> 
+                %% start with seed node
+                Host = elysium_config:seed_node(Config),
+                elysium_queue:node_change([Host]),
+                {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
                 Pid = self(),
                 Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
                 {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request}}.
@@ -68,10 +72,10 @@ handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
 handle_call({update_config, New_Config}, _From, St) ->
     {reply, ok, St#state{config = New_Config}}.
 
-handle_info({update_nodes, Caller, New_Nodes}, #state{curr_request = Caller} = St) ->
+handle_info({update_nodes, Caller, New_Nodes}, #state{curr_request = {Caller, _}} = St) ->
     New_State = handle_node_change(New_Nodes, St),
     {noreply, New_State#state{curr_request = undefined}};
-handle_info({'DOWN', Ref, _, _, _}, #state{curr_request = Ref} = St) ->
+handle_info({'DOWN', Ref, _, _, _}, #state{curr_request = {_, Ref}} = St) ->
     {noreply, St#state{curr_request = undefined}};
 handle_info({'DOWN', _, _, _, _}, St) ->
     {noreply, St};
@@ -82,7 +86,7 @@ handle_cast({update_nodes, _}, #state{curr_request = undefined, config = Config}
     Pid = self(),
     Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
     {noreply, St#state{curr_request = Curr_Request}};
-handle_cast({update_nodes, forced}, #state{curr_request = Curr_Request, config = Config} = St) ->
+handle_cast({update_nodes, forced}, #state{curr_request = {Curr_Request, _}, config = Config} = St) ->
     exit(Curr_Request, kill),
     Pid = self(),
     New_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
@@ -107,7 +111,7 @@ update_nodes(Config, Pid) ->
         {ok, #rows{rows = []}}   -> lager:warning("update nodes returned empty list");
         {ok, #rows{rows = Rows}} -> lager:debug("requesting peers result: ~p", [Rows]),
                                     Nodes = [to_host_port(N, Config) || N <- Rows],
-                                    Pid ! {update_nodes, self, [Host | Nodes]},
+                                    Pid ! {update_nodes, self(), [Host | Nodes]},
                                     ok
     end.
 
@@ -123,9 +127,7 @@ handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = _Config} = St) 
                  St#state{nodes = New_Nodes}
     end.
 
-to_host_port(Bin, Config) ->
-    case binary:split(Bin, <<":">>) of
-        [HostBin] -> Port = elysium_config:default_port(Config),
-                     {binary_to_list(HostBin), Port};
-        [HostBin, PortBin] -> {binary_to_list(HostBin), binary_to_integer(PortBin)}
-    end.
+to_host_port([Term], Config) ->
+    Host = inet_parse:ntoa(Term),
+    Port = elysium_config:default_port(Config),
+    {Host, Port}.
