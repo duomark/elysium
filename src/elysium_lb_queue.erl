@@ -96,7 +96,7 @@ handle_call(Request, _From, #state{} = St) -> {stop, {unexpected_call, Request},
 %% start session on newly discovered nodes
 start_session_on_new_nodes(New_Nodes, Old_Nodes, Config) ->
     Diff = [ Node || Node <- New_Nodes, lists:member(Node, Old_Nodes) =:= false],
-    [start_session_on_node(Node, Config) || Node <- Diff],
+    [start_session_on_node(Node, Config) || Node <- Diff].
 
 start_session_on_node(Node, Config) ->   
     Supervisor_Pid = elysium_queue:get_connection_supervisor(),
