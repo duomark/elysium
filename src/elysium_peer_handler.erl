@@ -60,11 +60,13 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 init(Config) -> 
                 %% start with seed node
                 Host = elysium_config:seed_node(Config),
-                elysium_queue:node_change([Host]),
+                Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
+                elysium_lb_queue:replace_items(Lb_Queue_Name, {init, [Host]}),
                 {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
                 Pid = self(),
                 Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
                 {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request, nodes=[Host]}}.
+
 terminate(_Reason, _St) -> ok.
 
 handle_call({get_nodes}, _From, #state{nodes = Nodes} = St) ->
@@ -79,7 +81,7 @@ handle_info({'DOWN', Ref, _, _, _}, #state{curr_request = {_, Ref}} = St) ->
     {noreply, St#state{curr_request = undefined}};
 handle_info({'DOWN', _, _, _, _}, St) ->
     {noreply, St};
-handle_info(Whatever, St) ->
+handle_info(_Whatever, St) ->
     {noreply, St}.
 
 handle_cast({update_nodes, _}, #state{curr_request = undefined, config = Config} = St) ->
@@ -118,12 +120,13 @@ update_nodes(Config, Pid) ->
 timeout(Config) ->
     elysium_config:request_peers_frequency(Config).
 
-handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = _Config} = St) ->
+handle_node_change(New_Nodes, #state{nodes = Old_Nodes, config = Config} = St) ->
     New_Nodes_Set = ordsets:from_list(New_Nodes),
     Old_Nodes_Set = ordsets:from_list(Old_Nodes),
     case New_Nodes_Set =:= Old_Nodes_Set of
         true  -> St;
-        false -> elysium_queue:node_change(New_Nodes),
+        false -> Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
+                 elysium_lb_queue:replace_items(Lb_Queue_Name, New_Nodes),
                  St#state{nodes = New_Nodes}
     end.
 
