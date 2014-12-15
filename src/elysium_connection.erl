@@ -86,7 +86,12 @@ start_link(Config) ->
 start_link(Config, restart) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
-    start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
+    start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []);
+
+%% @doc start session on particular node
+start_link(Config, {node, Node}) ->
+    Max_Retries   = elysium_config:checkout_max_retry  (Config),
+    start_channel(Config, {node, Node}, Max_Retries, -1, []).
 
 -spec stop(connection_id()) -> ok.
 %% @doc Stop an existing seestar_session.
@@ -188,24 +193,19 @@ start_channel(_Config, _Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Conne
   when Times_Tried >= Max_Retries ->
     {error, {cassandra_not_available, Attempted_Connections}};
 
+start_channel( Config,  {node, {Ip, Port}=Node}, _Max_Retries, Times_Tried, Attempted_Connections) 
+    when is_list(Ip), is_integer(Port), Port > 0 ->
+    %% Attempt to connect to Cassandra node...
+    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
+    try_connect(Config, Lb_Queue_Name, 0, Times_Tried, Attempted_Connections, Node);
+
 start_channel( Config,  Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections) ->
-    case ets_buffer:read_dedicated(Lb_Queue_Name) of
-
-        %% Race condition with another user, try again...
-        %% (When this happens, a cassandra node is left out permanently!)
-        {missing_ets_data, Lb_Queue_Name, Read_Loc} ->
-            lager:error("Missing ETS data reading ~p at location ~p~n", [Lb_Queue_Name, Read_Loc]),
-            start_channel(Config, Lb_Queue_Name, Max_Retries, Times_Tried+1, Attempted_Connections);
-
+    case elysium_lb_queue:checkout(Lb_Queue_Name) of
         %% Give up if there are no connections available...
-        [] -> {error, {cassandra_not_available, Attempted_Connections}};
-
+        empty -> {error, {cassandra_not_available, Attempted_Connections}};
         %% Attempt to connect to Cassandra node...
-        [{Ip, Port} = Node] when is_list(Ip), is_integer(Port), Port > 0 ->
-            try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, Node);
-
-        %% Somehow the load balancer queue died, or something even worse!
-        Error -> Error
+        {value, {Ip, Port} = Node} when is_list(Ip), is_integer(Port), Port > 0 ->
+            try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, Node)
     end.
 
 try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connections, {Ip, Port} = Node) ->
@@ -233,7 +233,7 @@ try_connect(Config, Lb_Queue_Name, Max_Retries, Times_Tried, Attempted_Connectio
                           [Node_Failure | Attempted_Connections])
 
             %% Ensure that we get the Node checked back in.
-    after _ = ets_buffer:write_dedicated(Lb_Queue_Name, Node)
+    after _ = elysium_lb_queue:checkin(Lb_Queue_Name, Node)
     end.
 
 -spec get_one_shot_connection(config_type(), string(), pos_integer()) -> {ok, connection_id()} | any().
