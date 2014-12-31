@@ -35,7 +35,8 @@
 
          activate/0,
          deactivate/0,
-         enable/0
+         enable/0,
+         node_change/1
         ]).
 
 %% FSM states
@@ -106,6 +107,11 @@ deactivate() ->
 %% @doc Change disabled to inactive state, allowing new session creation.
 enable() ->
     gen_fsm:sync_send_event(?SERVER, enable).
+
+-spec node_change([{inet:hostname(), inet:port_number()}]) -> ok.
+%% @doc Notifies the queue that the node list changed
+node_change(Nodes) ->
+    gen_fsm:sync_send_event(?SERVER, {node_change, Nodes}).
 
 
 %%%-----------------------------------------------------------------------
@@ -190,9 +196,9 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
 ?inactive(activate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Connections = elysium_config:session_max_count   (Config),
     Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
-    Num_Nodes       = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
+    Max_Connections = elysium_config:session_max_count   (Config),
+    Num_Nodes       = elysium_lb_queue:num_entries(Lb_Queue_Name),
     _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
          || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
     {reply, Max_Connections, ?active, State};
