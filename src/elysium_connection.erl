@@ -132,7 +132,7 @@ get_buffer_strategy_module(Config) ->
     {Buffering_Strategy, BS_Module}.
 
 -spec with_connection(config_type(), fun((pid(), Args, Consist) -> Result), Args, Consistency)
-                     -> {error, no_db_connections}
+                     -> {error, no_db_connections | {atom(), any()}}
                             | Result when Args        :: [any()],
                                           Consist     :: seestar:consistency(),
                                           Consistency :: seestar:consistency(),
@@ -160,7 +160,7 @@ with_connection(Config, Session_Fun, Args, Consistency)
     end.
 
 -spec with_connection(config_type(), module(), Fun::atom(), Args::[any()], seestar:consistency())
-                     -> {error, no_db_connections} | any().
+                     -> {error, no_db_connections | {atom(), any()}} | any().
 %% @doc
 %%   Obtain an active seestar_session and use it solely
 %%   for the duration required to execute Mod:Fun
@@ -311,4 +311,4 @@ handle_mod_fun_reply(_Buffering_Strategy, Reply, _Mod, _Fun, _Args) ->
 
 report_error(Error, Module, Function, Args) ->
     lager:error("~p:~p got ~p with ~p~n", [Module, Function, Error, Args]),
-    Error.
+    {error, Error}.
