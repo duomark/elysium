@@ -1,5 +1,5 @@
 %%%------------------------------------------------------------------------------
-%%% @copyright (c) 2014, Tigertext
+%%% @copyright (c) 2014-2015, Tigertext
 %%% @author George Ye <gye@tigertext.com> [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
