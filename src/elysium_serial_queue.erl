@@ -57,7 +57,7 @@
 -spec start_link  (queue_name()) -> {ok, pid()}.
 
 -spec checkin     (queue_name(), queue_data()) -> checkin_count().
--spec checkout    (queue_name())               -> checkout_count().
+-spec checkout    (queue_name())               -> {value, queue_data()} | empty.
 
 -spec num_entries (queue_name()) -> queue_len().
 -spec is_empty    (queue_name()) -> boolean().

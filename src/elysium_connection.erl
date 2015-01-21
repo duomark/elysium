@@ -99,19 +99,19 @@ stop(Connection_Id)
   when is_pid(Connection_Id) ->
     seestar_session:stop(Connection_Id).
 
--spec one_shot_query(config_type(), cassandra_node(), Query::string(), ssestar:consistency())
+-spec one_shot_query(config_type(), cassandra_node(), Query::string(), seestar:consistency())
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra.
 one_shot_query(Config, Node, Query, Consistency) ->
     one_shot_query(Config, Node, Query, Consistency, infinity).
 
--spec one_shot_query(config_type(), cassandra_node(), Query::string(), ssestar:consistency(), pos_integer() | infinity)
+-spec one_shot_query(config_type(), cassandra_node(), Query::string(), seestar:consistency(),
+                     pos_integer() | infinity)
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra with a timeout (in ms).
 one_shot_query(Config, {Host, Port} = _Node, Query, Consistency, _Reply_Timeout)
   when is_list(Host),
-       is_integer(Port), Port > 0,
-       is_integer(_Reply_Timeout), _Reply_Timeout > 0 ->
+       is_integer(Port), Port > 0 ->
     case get_one_shot_connection(Config, Host, Port) of
         {ok, Connection_Id} ->
             try   seestar_session:perform(Connection_Id, Query, Consistency)
