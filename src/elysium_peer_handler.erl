@@ -8,6 +8,7 @@
          start_link/1,
          get_nodes/0,
          update_nodes/0,
+         update_nodes/1,
          update_config/1
         ]).
 
@@ -23,7 +24,7 @@
           nodes = []               :: [cassandra_node()],
           config = undefined       :: undefined | config_type(),
           timer = undefined        :: undefined | timer:tref(),
-          curr_request = undefined :: undefined | pid()
+          curr_request = undefined :: undefined | {pid(), reference()}
          }).
 
 %% -------------------------------------------------------------------------
@@ -32,7 +33,7 @@
 
 -spec start_link(config_type()) -> {ok, pid()}.
 %% @doc 
-start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
+start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, {Config}, []).
 
 -spec get_nodes() -> [cassandra_node()].
 %% @doc Returns the list of nodes, this is updated every minute
@@ -55,17 +56,17 @@ update_config(Config) -> gen_server:call(?MODULE, {update_config, Config}).
 %% gen_server callback functions
 %% -------------------------------------------------------------------------
 
--spec init(config_type()) -> {ok, #state{}}.
+-spec init({config_type()}) -> {ok, #state{}}.
 
-init(Config) -> 
-                %% start with seed node
-                Host = elysium_config:seed_node(Config),
-                Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
-                elysium_lb_queue:replace_items(Lb_Queue_Name, {init, [Host]}),
-                {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
-                Pid = self(),
-                Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
-                {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request, nodes=[Host]}}.
+init({Config}) -> 
+    %% start with seed node
+    Host = elysium_config:seed_node(Config),
+    Lb_Queue_Name = elysium_config:load_balancer_queue(Config),
+    elysium_lb_queue:replace_items(Lb_Queue_Name, {init, [Host]}),
+    {ok, Timer} = timer:apply_interval(timeout(Config), ?MODULE, update_nodes, []),
+    Pid = self(),
+    Curr_Request = spawn_monitor(fun() -> update_nodes(Config, Pid) end),
+    {ok, #state{config = Config, timer = Timer, curr_request = Curr_Request, nodes=[Host]}}.
 
 terminate(_Reason, _St) -> ok.
 

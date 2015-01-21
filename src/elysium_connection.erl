@@ -78,7 +78,7 @@
 start_link(Config) ->
     Lb_Queue_Name = elysium_config:load_balancer_queue (Config),
     Max_Retries   = elysium_config:checkout_max_retry  (Config),
-    Start_Delay = elysium_config:max_restart_delay   (Config),
+    Start_Delay   = elysium_config:max_restart_delay   (Config),
     ok = timer:sleep(elysium_random:random_int_up_to(Start_Delay)),
     start_channel(Config, Lb_Queue_Name, Max_Retries, -1, []).
 
@@ -99,13 +99,13 @@ stop(Connection_Id)
   when is_pid(Connection_Id) ->
     seestar_session:stop(Connection_Id).
 
--spec one_shot_query(config_type(), cassandra_node(), Query::string(), seestar:consistency())
+-spec one_shot_query(config_type(), cassandra_node(), Query::iodata(), seestar:consistency())
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra.
 one_shot_query(Config, Node, Query, Consistency) ->
     one_shot_query(Config, Node, Query, Consistency, infinity).
 
--spec one_shot_query(config_type(), cassandra_node(), Query::string(), seestar:consistency(),
+-spec one_shot_query(config_type(), cassandra_node(), Query::iodata(), seestar:consistency(),
                      pos_integer() | infinity)
                     -> {ok, seestar_result:result()} | {error, seestar_error:error()}.
 %% @doc Connect, execute raw CQL and close a connection to Cassandra with a timeout (in ms).
