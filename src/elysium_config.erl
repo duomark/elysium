@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
-%%% @copyright (c) 2014, DuoMark International, Inc.
+%%% @copyright (c) 2014-2015, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
-%%% @reference 2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference 2014-2015 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
@@ -154,7 +154,8 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
                           audit_ets_name(), connection_queue_name(), requests_queue_name(),
                           timeout_in_ms(), host_list(), timeout_in_ms(), timeout_in_ms(), timeout_in_ms(),
                           max_connections(), max_retries(), decay_prob(),
-                          binary(), request_peers_frequency(), inet:port_number()) -> {vbisect, vbisect:bindict()}.
+                          cassandra_node(), request_peers_frequency(),
+                          inet:port_number()) -> {vbisect, vbisect:bindict()}.
 %% @doc
 %%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
@@ -163,21 +164,21 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
                     Audit_Ets_Name, Connection_Queue_Name, Requests_Queue_Name,
                     Request_Reply_Timeout, [{_Ip, _Port} | _] = Host_List,
                     Connect_Timeout_Millis, Send_Timeout_Millis, Restart_Millis,
-                    Max_Connections, Max_Retries, Decay_Prob, {Host, Port} = Seed_Node,
+                    Max_Connections, Max_Retries, Decay_Prob, {Seed_Host, Seed_Port} = Seed_Node,
                     Request_Peers_Frequency_Millis, Default_Port)
  when is_atom(Buffering_Strategy),
       is_atom(Lb_Queue_Name),             is_atom(Audit_Ets_Name),
       is_atom(Connection_Queue_Name),     is_atom(Requests_Queue_Name),
       is_list(_Ip), is_integer(_Port),    _Port > 0,
-      is_integer(Request_Reply_Timeout),  Request_Reply_Timeout > 0,
+      is_integer(Request_Reply_Timeout),  Request_Reply_Timeout  > 0,
       is_integer(Connect_Timeout_Millis), Connect_Timeout_Millis > 0,
-      is_integer(Send_Timeout_Millis),    Send_Timeout_Millis > 0,
-      is_integer(Restart_Millis),         Restart_Millis > 0,
-      is_integer(Max_Connections),        Max_Connections   > 0,
-      is_integer(Max_Retries),            Max_Retries   >= 0,
-      is_integer(Decay_Prob),             Decay_Prob    >= 0, Decay_Prob =< 1000000,
-      is_list(Host),
-      is_integer(Port),                   Port          >= 0,
+      is_integer(Send_Timeout_Millis),    Send_Timeout_Millis    > 0,
+      is_integer(Restart_Millis),         Restart_Millis         > 0,
+      is_integer(Max_Connections),        Max_Connections        > 0,
+      is_integer(Max_Retries),            Max_Retries >= 0,
+      is_integer(Decay_Prob),             Decay_Prob  >= 0, Decay_Prob =< 1000000,
+      is_integer(Seed_Port),              Seed_Port   >= 0,
+      is_list   (Seed_Host),
       is_integer(Request_Peers_Frequency_Millis), Request_Peers_Frequency_Millis > 0,
       is_integer(Default_Port), Default_Port > 0, Default_Port =< 65535 ->
 
