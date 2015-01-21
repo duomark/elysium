@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
-%%% @copyright (c) 2014, DuoMark International, Inc.
+%%% @copyright (c) 2014-2015, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
-%%% @reference 2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference 2014-2015 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
@@ -22,7 +22,8 @@
          checkout/1,
          num_entries/1,
          is_empty/1,
-         status/1
+         status/1,
+         status_reset/1
         ]).
 
 %% gen_server exports.
@@ -32,10 +33,13 @@
 
 -include("elysium_types.hrl").
 
+-type checkin_count()  :: non_neg_integer().
+-type checkout_count() :: non_neg_integer().
+
 -record(state, {
           queue = queue:new(),
-          checkin_count  = 0 :: non_neg_integer(),
-          checkout_count = 0 :: non_neg_integer()
+          checkin_count  = 0 :: checkin_count(),
+          checkout_count = 0 :: checkout_count()
          }).
 
 
@@ -44,31 +48,48 @@
 %% -------------------------------------------------------------------------
 
 -type queue_data() :: any().
--type prop() :: {checkin_count,  non_neg_integer()}
-              | {checkout_count, non_neg_integer()}
-              | {num_entries,    non_neg_integer()}.
+-type queue_len()  :: non_neg_integer().
 
--spec start_link(queue_name()) -> {ok, pid()}.
+-type prop() :: {checkin_count,  checkin_count()}
+              | {checkout_count, checkout_count()}
+              | {num_entries,    queue_len()}.
 
--spec num_entries (queue_name()) -> non_neg_integer().
+-spec start_link  (queue_name()) -> {ok, pid()}.
+
+-spec checkin     (queue_name(), queue_data()) -> checkin_count().
+-spec checkout    (queue_name())               -> checkout_count().
+
+-spec num_entries (queue_name()) -> queue_len().
 -spec is_empty    (queue_name()) -> boolean().
 -spec status      (queue_name()) -> {status, [prop()]}.
 
-start_link(Queue_Name) -> gen_server:start_link({local, Queue_Name}, ?MODULE, {}, []).
+start_link   (Queue_Name) -> gen_server:start_link({local, Queue_Name}, ?MODULE, {}, []).
 
-checkin  (Queue_Name,  Queue_Data) -> gen_server:call(Queue_Name, {checkin, Queue_Data}).
-checkout (Queue_Name)              -> gen_server:call(Queue_Name, checkout).
+checkin      (Queue_Name, Queue_Data) -> gen_server:call(Queue_Name, {checkin, Queue_Data}).
+checkout     (Queue_Name)             -> gen_server:call(Queue_Name, checkout).
 
-num_entries (Queue_Name) -> gen_server:call(Queue_Name, num_entries).
-is_empty    (Queue_Name) -> gen_server:call(Queue_Name, is_empty).
-status      (Queue_Name) -> gen_server:call(Queue_Name, status).
+num_entries  (Queue_Name) -> gen_server:call(Queue_Name, num_entries).
+is_empty     (Queue_Name) -> gen_server:call(Queue_Name, is_empty).
+status       (Queue_Name) -> gen_server:call(Queue_Name, status).
+status_reset (Queue_Name) -> gen_server:call(Queue_Name, clear_counts).
 
 
 %% -------------------------------------------------------------------------
 %% gen_server callback functions
 %% -------------------------------------------------------------------------
 
+-type from() :: {pid(), reference()}.
+
 -spec init({}) -> {ok, #state{}}.
+-spec handle_call({checkin, queue_data()}, from(), #state{}) -> {reply, queue_len(),  #state{}};
+                 ( checkout,               from(), #state{}) -> {reply, queue_data(), #state{}};
+                 ( num_entries,            from(), #state{}) -> {reply, queue_len(),  #state{}};
+                 ( status_reset,           from(), #state{}) -> {reply, prop(),       #state{}};
+                 ( is_empty,               from(),    State) -> {reply, boolean(),       State}
+                                                                        when State :: #state{};
+                 ( status,                 from(),    State) -> {reply, prop(),          State}
+                                                                        when State :: #state{}.
+                          
 
 init({}) -> {ok, #state{}}.
 terminate(_Reason, _St) -> ok.
@@ -83,16 +104,15 @@ handle_call(checkout, _From, #state{queue=Queue, checkout_count=Checkouts} = St)
     New_Count = Checkouts + 1,
     {reply, Value, St#state{queue=New_Queue, checkout_count=New_Count}};
 
-handle_call(num_entries, _From, #state{queue=Queue} = St) -> {reply, queue:len(Queue),      St};
-handle_call(is_empty,    _From, #state{queue=Queue} = St) -> {reply, queue:is_empty(Queue), St};
-handle_call(status,      _From, #state{queue=Queue, checkin_count=In, checkout_count=Out} = St) ->
-    Size  = queue:len(Queue),
-    Props = [
-             {checkin_count,    In},
-             {checkout_count,  Out},
-             {num_entries,    Size}
-            ],
+handle_call(num_entries,  _From, #state{queue=Queue} = St) -> {reply, queue:len(Queue),      St};
+handle_call(is_empty,     _From, #state{queue=Queue} = St) -> {reply, queue:is_empty(Queue), St};
+handle_call(status,       _From, #state{} = St) ->
+    Props = get_status_counts(St),
     {reply, {status, Props}, St};
+
+handle_call(status_reset, _From, #state{} = St) ->
+    Props = get_status_counts(St),
+    {reply, {status_reset, Props}, St#state{checkin_count=0, checkout_count=0}};
 
 handle_call(Request, _From, #state{} = St) -> {stop, {unexpected_call, Request}, St}.
 
@@ -100,6 +120,17 @@ handle_call(Request, _From, #state{} = St) -> {stop, {unexpected_call, Request},
 %% Unused callbacks
 
 handle_cast(Request, St) -> {stop, {unexpected_cast, Request}, St}.
-handle_info(Info,    St) -> {stop, {unexpected_info, Info}, St}.
+handle_info(Info,    St) -> {stop, {unexpected_info,    Info}, St}.
 
 code_change(_OldVsn, St, _Extra) -> {ok, St}.
+
+
+%% Support functions
+
+get_status_counts(#state{queue=Queue, checkin_count=In, checkout_count=Out}) ->
+    Size  = queue:len(Queue),
+    [
+     {checkin_count,    In},
+     {checkout_count,  Out},
+     {num_entries,    Size}
+    ].
