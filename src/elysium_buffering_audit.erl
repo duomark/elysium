@@ -15,6 +15,11 @@
 -module(elysium_buffering_audit).
 -author('jay@duomark.com').
 
+%% External API for audit reporting.
+-export([get_audit_count/1,
+         get_audit_count_reset/1]).
+
+%% Exported functions for audit counting behaviours.
 -export([
          audit_count_init/2,
          audit_count/3,
@@ -105,6 +110,37 @@ audit_count(Config, BS_Module, Type) ->
 
 count(Audit_Name, Audit_Key, Counter_Pos) ->
     ets:update_counter(Audit_Name, Audit_Key, {Counter_Pos, 1}).
+
+
+-spec get_audit_count       (config_type()) -> proplists:proplist().
+-spec get_audit_count_reset (config_type()) -> proplists:proplist().
+
+get_audit_count(Config) ->
+    Count_Flds = count_fields(),
+    Count_Ops  = [{Pos, 0} || {_Label, Pos} <- Count_Flds],
+    return_counts_proplist(Config, Count_Flds, Count_Ops).
+
+get_audit_count_reset(Config) ->
+    Count_Flds = count_fields(),
+    Count_Ops  = [{Pos, 0, 0, 0} || {_Label, Pos} <- Count_Flds],
+    return_counts_proplist(Config, Count_Flds, Count_Ops).
+
+return_counts_proplist(Config, Count_Flds, Count_Ops) ->
+    {_Buffering, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
+    Audit_Key  = {BS_Module, counts},
+    Audit_Name = elysium_config:audit_ets_name(Config),
+    Raw_Counts = ets:update_counter(Audit_Name, Audit_Key, Count_Ops),
+    lists:zipwith(fun({Label, _Pos}, Count) -> {Label, Count} end, Count_Flds, Raw_Counts).
+
+count_fields() ->    
+    [{pending_dead,     #elysium_audit_counts.pending_dead},
+     {pending_timeouts, #elysium_audit_counts.pending_timeouts},
+     {session_dead,     #elysium_audit_counts.session_dead},
+     {session_decay,    #elysium_audit_counts.session_decay},
+     {session_timeouts, #elysium_audit_counts.session_timeouts},
+     {session_wrong,    #elysium_audit_counts.session_wrong},
+     {worker_errors,    #elysium_audit_counts.worker_errors},
+     {worker_timeouts,  #elysium_audit_counts.worker_timeouts}].
 
 
 %%%-----------------------------------------------------------------------

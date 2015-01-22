@@ -223,7 +223,7 @@ load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec connection_buffering_strategy (config_type()) -> elysium_connection:buffering().
-%% @doc Get the configured name of the ets table used for auditing internals.
+%% @doc Get the configured name of the buffering strategy.
 connection_buffering_strategy  ({config_mod,  Config_Module}) -> Config_Module:cassandra_connection_bs();
 connection_buffering_strategy  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connection_bs">>, Bindict),
                                                                  binary_to_atom(Bin_Value, utf8).
