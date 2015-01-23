@@ -387,11 +387,11 @@ status(Config) ->
 
 queue_status(Config, Queue_Name) ->
     {_Buffering, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
-    BS_Module:queue_status(Config, Queue_Name).
+    BS_Module:queue_status(Queue_Name).
 
 queue_status_reset(Config, Queue_Name) ->
     {_Buffering, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
-    BS_Module:queue_status_reset(Config, Queue_Name).
+    BS_Module:queue_status_reset(Queue_Name).
 
 report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
     {Queue_Name, {missing_ets_buffer, 0, Max}};
