@@ -34,7 +34,10 @@
          pending_request_count/1,
          checkin_pending_request/3,
          checkout_pending_request/1,
-         checkout_pending_error/4
+         checkout_pending_error/4,
+
+         queue_status/1,
+         queue_status_reset/1
         ]).
 
 %% Buffering audit API
@@ -129,6 +132,13 @@ checkout_pending_error(Config, ?MODULE, Pending_Queue, Error) ->
     _ = elysium_buffering_audit:audit_count(Config, ?MODULE, pending_ets_errors),
     lager:error("Pending requests queue ~p buffer error: ~9999p~n", [Pending_Queue, Error]),
     Error.
+
+
+-spec queue_status       (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+-spec queue_status_reset (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+
+queue_status       (_Queue_Name) -> {status, []}.
+queue_status_reset (_Queue_Name) -> {status, []}.
 
 
 %%%-----------------------------------------------------------------------

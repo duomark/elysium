@@ -37,6 +37,8 @@
 %% External API supplied for behaviour implementations to share.
 -export([
          status/1,
+         queue_status/2,
+         queue_status_reset/2,
 
          create_connection/3,
          checkin_connection/4,
@@ -69,6 +71,9 @@
 -callback checkout_pending_error(config_type(), buffering_strategy_module(), requests_queue_name(), Error)
                       -> retry | Error when Error::any().
 
+-callback queue_status       (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+-callback queue_status_reset (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+
 
 %%%-----------------------------------------------------------------------
 %%% Buffering strategy provided functions
@@ -87,7 +92,12 @@
 -spec decay_causes_death (config_type(), connection_id()) -> boolean().
 -spec decay_connection   (config_type(), buffering_strategy_module(), connection_id()) -> true.
 
--spec status        (config_type()) -> status_reply().
+-spec status             (config_type()) -> status_reply().
+-spec queue_status       (config_type(), connection_queue_name() | requests_queue_name())
+                         -> {status, proplists:proplist()}.
+-spec queue_status_reset (config_type(), connection_queue_name() | requests_queue_name())
+                         -> {status, proplists:proplist()}.
+
 -spec report_available_resources(Queue, Connections, Max_Or_Timeout) -> {Queue, Connections, Max_Or_Timeout}
                                        when Queue          :: queue_name(),
                                             Connections    :: max_connections() | pending_count(),
@@ -374,6 +384,14 @@ decay_connection(Config, BS_Module, Connection_Id) ->
 status(Config) ->
     {status, {idle_connections(Config),
               pending_requests(Config)}}.
+
+queue_status(Config, Queue_Name) ->
+    {_Buffering, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
+    BS_Module:queue_status(Config, Queue_Name).
+
+queue_status_reset(Config, Queue_Name) ->
+    {_Buffering, BS_Module} = elysium_connection:get_buffer_strategy_module(Config),
+    BS_Module:queue_status_reset(Config, Queue_Name).
 
 report_available_resources(Queue_Name, {missing_ets_buffer, Queue_Name}, Max) ->
     {Queue_Name, {missing_ets_buffer, 0, Max}};

@@ -30,7 +30,10 @@
          pending_request_count/1,
          checkin_pending_request/3,
          checkout_pending_request/1,
-         checkout_pending_error/4
+         checkout_pending_error/4,
+
+         queue_status/1,
+         queue_status_reset/1
         ]).
 
 %% Buffering Audit API
@@ -100,6 +103,13 @@ checkout_pending_error(_Config, ?MODULE, Pending_Queue, Error) ->
     lager:error("Pending requests queue ~p buffer error: ~9999p~n", [Pending_Queue, Error]),
     Error.
 
+
+-spec queue_status       (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+-spec queue_status_reset (connection_queue_name() | requests_queue_name()) -> {status, proplists:proplist()}.
+
+queue_status       (Queue_Name) -> elysium_serial_queue:status       (Queue_Name).
+queue_status_reset (Queue_Name) -> elysium_serial_queue:status_reset (Queue_Name).
+    
 
 %%%-----------------------------------------------------------------------
 %%% Custom audit count functions
