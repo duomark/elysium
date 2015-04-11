@@ -62,12 +62,14 @@
 -author('jay@duomark.com').
 
 -export([
-         all_config_atoms/0,
+         all_config_atoms_ordered/0,
+         all_config_atoms_sorted/0,
          all_config_bins/0,
          is_valid_config/1,
          is_valid_config_module/1,
          is_valid_config_vbisect/1,
          make_vbisect_config/17,
+         make_vbisect_config/1,
 
          is_elysium_config_enabled/1,
          load_balancer_queue/1,
@@ -109,29 +111,38 @@
 %% Configuration parameters may be either compiled functions or keys in a dictionary.
 %% These functions are used for validating once before using.
 
+-spec all_config_atoms_ordered() -> [atom()].
+%% @doc Get a list of all the configuration parameter keys as atoms in the order needed by make_vbisect_config/17.
+all_config_atoms_ordered() ->
+    [
+     is_elysium_enabled,
+     cassandra_lb_queue,
+     cassandra_connection_bs,
+     cassandra_audit_ets,
+     cassandra_session_queue,
+     cassandra_requests_queue,
+     cassandra_request_reply_timeout,
+     cassandra_hosts,
+     cassandra_connect_timeout,
+     cassandra_send_timeout,
+     cassandra_max_restart_delay,
+     cassandra_max_sessions,
+     cassandra_max_checkout_retry,
+     cassandra_session_decay_probability,
+     cassandra_seed_node,
+     cassandra_request_peers_frequency,
+     cassandra_default_port
+    ].
 
--spec all_config_atoms() -> [atom()].
-%% @doc Get a list of all the configuration parameter keys as atoms.
-all_config_atoms() ->
-    ordsets:from_list([
-                       is_elysium_enabled,
-                       cassandra_hosts,
-                       cassandra_lb_queue,
-                       cassandra_connection_bs,
-                       cassandra_session_queue,
-                       cassandra_requests_queue,
-                       cassandra_request_reply_timeout,
-                       cassandra_max_sessions,
-                       cassandra_max_restart_delay,
-                       cassandra_connect_timeout,
-                       cassandra_max_checkout_retry,
-                       cassandra_session_decay_probability
-                      ]).
+-spec all_config_atoms_sorted()  -> [atom()].
+%% @doc Get a list of all the configuration parameter keys as atoms sorted alphabetically.
+all_config_atoms_sorted() ->
+    ordsets:from_list(all_config_atoms_ordered()).
 
 -spec all_config_bins()  -> [binary()].
 %% @doc Get a list of all the configuration parameter keys as binaries.
 all_config_bins() ->
-    [atom_to_binary(Attr, utf8) || Attr <- all_config_atoms()].
+    [atom_to_binary(Attr, utf8) || Attr <- all_config_atoms_ordered()].
 
 -spec is_valid_config(config_type())  -> boolean().
 %% @doc Verify that the configuration is a valid construct and has all the parameter attributes supported.
@@ -142,7 +153,7 @@ is_valid_config({config_mod, Module}) -> {module, Module} = code:ensure_loaded(M
 -spec is_valid_config_module(module())  -> boolean().
 %% @doc Verify that a compiled module configuration has a function for every configuration parameter.
 is_valid_config_module(Module) when is_atom(Module) ->
-    lists:all(fun(Param) -> erlang:function_exported(Module, Param, 0) end, all_config_atoms()).
+    lists:all(fun(Param) -> erlang:function_exported(Module, Param, 0) end, all_config_atoms_ordered()).
 
 -spec is_valid_config_vbisect(vbisect:bindict())  -> boolean().
 %% @doc Verify that a binary dictionary contains all the keys corresponding to configuration parameters.
@@ -157,7 +168,7 @@ is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
                           cassandra_node(), request_peers_frequency(),
                           inet:port_number()) -> {vbisect, vbisect:bindict()}.
 %% @doc
-%%   Construct a vbisect binary dictionary from an entire set of configuration parameters.
+%%   Construct a vbisect binary dictionary from individual configuration parameter values.
 %%   The resulting data structure may be passed as a configuration to any of the elysium functions.
 %% @end
 make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
@@ -176,7 +187,7 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
       is_integer(Restart_Millis),         Restart_Millis         > 0,
       is_integer(Max_Connections),        Max_Connections        > 0,
       is_integer(Max_Retries),            Max_Retries >= 0,
-      is_integer(Decay_Prob),             Decay_Prob  >= 0, Decay_Prob =< 1000000,
+      is_integer(Decay_Prob),             Decay_Prob  >= 0, Decay_Prob =< 1000000000,
       is_integer(Seed_Port),              Seed_Port   >= 0,
       is_list   (Seed_Host),
       is_integer(Request_Peers_Frequency_Millis), Request_Peers_Frequency_Millis > 0,
@@ -202,6 +213,16 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
              {<<"cassandra_default_port">>,               integer_to_binary (Default_Port)}
             ],
     {vbisect, vbisect:from_list(Props)}.
+
+-spec make_vbisect_config(proplists:proplist()) -> {vbisect, vbisect:bindict()}.
+%% @doc
+%%   Construct a vbisect binary dictionary from an entire set of app.config configuration parameters.
+%%   The resulting data structure may be passed as a configuration to any of the elysium functions.
+%% @end
+make_vbisect_config(Config_Dictionary) ->
+    Attrs       = elysium_config:all_config_atoms_ordered(),
+    Attr_Values = [proplists:get_value(Attr, Config_Dictionary) || Attr <- Attrs],
+    apply(elsyium_config, make_vbisect_config, Attr_Values).
 
 
 %% Configuration accessors are expected to be used frequently.
