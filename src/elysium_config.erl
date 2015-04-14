@@ -158,7 +158,10 @@ is_valid_config_module(Module) when is_atom(Module) ->
 -spec is_valid_config_vbisect(vbisect:bindict())  -> boolean().
 %% @doc Verify that a binary dictionary contains all the keys corresponding to configuration parameters.
 is_valid_config_vbisect(Bindict) when is_binary(Bindict) ->
-    ordsets:is_subset(all_config_bins(), vbisect:fetch_keys(Bindict)).
+    ordsets:is_subset(
+      ordsets:from_list(all_config_bins()),
+      ordsets:from_list(vbisect:fetch_keys(Bindict))
+     ).
 
 
 -spec make_vbisect_config(boolean(), lb_queue_name(), elysium_connection:buffering(),
@@ -288,19 +291,19 @@ round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:f
 %% @end
 max_restart_delay  ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_restart_delay();
 max_restart_delay  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
-                                                     binary_to_term(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
 -spec connect_timeout  (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for a cassandra connection before giving up.
 connect_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_connect_timeout();
 connect_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connect_timeout">>, Bindict),
-                                                     binary_to_term(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
 -spec send_timeout      (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for sending a request to cassandra before giving up.
 send_timeout       ({config_mod,  Config_Module}) -> Config_Module:cassandra_send_timeout();
 send_timeout       ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_send_timeout">>, Bindict),
-                                                     binary_to_term(Bin_Value).
+                                                     binary_to_integer(Bin_Value).
 
 -spec session_max_count  (config_type()) -> max_connections().
 %% @doc Get the maximum number of live sessions that can be open simultaneously.
