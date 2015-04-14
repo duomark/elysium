@@ -222,7 +222,7 @@ make_vbisect_config(Enabled, Lb_Queue_Name, Buffering_Strategy,
 make_vbisect_config(Config_Dictionary) ->
     Attrs       = elysium_config:all_config_atoms_ordered(),
     Attr_Values = [proplists:get_value(Attr, Config_Dictionary) || Attr <- Attrs],
-    apply(elsyium_config, make_vbisect_config, Attr_Values).
+    apply(elysium_config, make_vbisect_config, Attr_Values).
 
 
 %% Configuration accessors are expected to be used frequently.
