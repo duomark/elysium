@@ -146,9 +146,10 @@ all_config_bins() ->
 
 -spec is_valid_config(config_type())  -> boolean().
 %% @doc Verify that the configuration is a valid construct and has all the parameter attributes supported.
-is_valid_config({vbisect,   Bindict}) -> is_valid_config_vbisect(Bindict);
-is_valid_config({config_mod, Module}) -> {module, Module} = code:ensure_loaded(Module),
-                                         is_valid_config_module(Module).
+is_valid_config ({config_app_config, App}) -> true;
+is_valid_config ({vbisect,       Bindict}) -> is_valid_config_vbisect(Bindict);
+is_valid_config ({config_mod,     Module}) -> {module, Module} = code:ensure_loaded(Module),
+                                              is_valid_config_module(Module).
     
 -spec is_valid_config_module(module())  -> boolean().
 %% @doc Verify that a compiled module configuration has a function for every configuration parameter.
@@ -233,53 +234,63 @@ make_vbisect_config(Config_Dictionary) ->
 %% as quickly as possible, therefore the raw accessors do not
 %% check for the validity of the parameters. These functions
 %% will crash if they are passed an invalid parameter.
+
+get_app_config(App, Param) -> {ok, Value} = application:get_env(App, Param), Value.
      
 -spec is_elysium_config_enabled (config_type()) -> boolean().
 %% @doc Determine if elysium is enabled.
-is_elysium_config_enabled ({config_mod,  Config_Module}) -> Config_Module:is_elysium_enabled();
-is_elysium_config_enabled ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"is_elysium_enabled">>, Bindict),
+is_elysium_config_enabled ({config_app_config,    App}) -> get_app_config(App, is_elysium_enabled);
+is_elysium_config_enabled ({config_mod, Config_Module}) -> Config_Module:is_elysium_enabled();
+is_elysium_config_enabled ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"is_elysium_enabled">>, Bindict),
                                                             binary_to_boolean(Bin_Value).
 
 -spec load_balancer_queue (config_type()) -> lb_queue_name().
 %% @doc Get the configured name of the round-robin load balancer queue.
-load_balancer_queue ({config_mod,  Config_Module}) -> Config_Module:cassandra_lb_queue();
-load_balancer_queue ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
+load_balancer_queue ({config_app_config,    App}) -> get_app_config(App, cassandra_lb_queue);
+load_balancer_queue ({config_mod, Config_Module}) -> Config_Module:cassandra_lb_queue();
+load_balancer_queue ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_lb_queue">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec connection_buffering_strategy (config_type()) -> elysium_connection:buffering().
 %% @doc Get the configured name of the buffering strategy.
-connection_buffering_strategy  ({config_mod,  Config_Module}) -> Config_Module:cassandra_connection_bs();
-connection_buffering_strategy  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connection_bs">>, Bindict),
+connection_buffering_strategy ({config_app_config,    App}) -> get_app_config(App, cassandra_connection_bs);
+connection_buffering_strategy ({config_mod, Config_Module}) -> Config_Module:cassandra_connection_bs();
+connection_buffering_strategy ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connection_bs">>, Bindict),
                                                                  binary_to_atom(Bin_Value, utf8).
 
 -spec audit_ets_name (config_type()) -> audit_ets_name().
 %% @doc Get the configured name of the ets table used for auditing internals.
-audit_ets_name  ({config_mod,  Config_Module}) -> Config_Module:cassandra_audit_ets();
-audit_ets_name  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_audit_ets">>, Bindict),
+audit_ets_name ({config_app_config,    App}) -> get_app_config(App, cassandra_audit_ets);
+audit_ets_name ({config_mod, Config_Module}) -> Config_Module:cassandra_audit_ets();
+audit_ets_name ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_audit_ets">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec session_queue_name (config_type()) -> connection_queue_name().
 %% @doc Get the configured name of the live session queue.
-session_queue_name  ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_queue();
-session_queue_name  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
+session_queue_name ({config_app_config,    App}) -> get_app_config(App, cassandra_session_queue);
+session_queue_name ({config_mod, Config_Module}) -> Config_Module:cassandra_session_queue();
+session_queue_name ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_queue">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec requests_queue_name (config_type()) -> requests_queue_name().
 %% @doc Get the configured name of the pending requests queue.
-requests_queue_name ({config_mod,  Config_Module}) -> Config_Module:cassandra_requests_queue();
-requests_queue_name ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_requests_queue">>, Bindict),
+requests_queue_name ({config_app_config,    App}) -> get_app_config(App, cassandra_requests_queue);
+requests_queue_name ({config_mod, Config_Module}) -> Config_Module:cassandra_requests_queue();
+requests_queue_name ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_requests_queue">>, Bindict),
                                                       binary_to_atom(Bin_Value, utf8).
 
 -spec request_reply_timeout  (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for a pending query request to wait for a session before giving up.
-request_reply_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_request_reply_timeout();
-request_reply_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_reply_timeout">>, Bindict),
+request_reply_timeout ({config_app_config,   App}) -> get_app_config(App, cassandra_request_reply_timeout);
+request_reply_timeout ({config_mod, Config_Module}) -> Config_Module:cassandra_request_reply_timeout();
+request_reply_timeout ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_reply_timeout">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec round_robin_hosts  (config_type()) -> host_list().
 %% @doc Get the configured set of cassandra nodes to contact.
-round_robin_hosts  ({config_mod,  Config_Module}) -> Config_Module:cassandra_hosts();
-round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_hosts">>, Bindict),
+round_robin_hosts ({config_app_config,    App}) -> get_app_config(App, cassandra_hosts);
+round_robin_hosts ({config_mod, Config_Module}) -> Config_Module:cassandra_hosts();
+round_robin_hosts ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_hosts">>, Bindict),
                                                      binary_to_term(Bin_Value).
 
 -spec max_restart_delay  (config_type()) -> timeout_in_ms().
@@ -289,57 +300,66 @@ round_robin_hosts  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:f
 %%   timeout or you risk failing elysium_connection_sup on application
 %%   startup.
 %% @end
-max_restart_delay  ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_restart_delay();
-max_restart_delay  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
+max_restart_delay ({config_app_config,    App}) -> get_app_config(App, cassandra_max_restart_delay);
+max_restart_delay ({config_mod, Config_Module}) -> Config_Module:cassandra_max_restart_delay();
+max_restart_delay ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_restart_delay">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec connect_timeout  (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for a cassandra connection before giving up.
-connect_timeout    ({config_mod,  Config_Module}) -> Config_Module:cassandra_connect_timeout();
-connect_timeout    ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connect_timeout">>, Bindict),
+connect_timeout ({config_app_config,    App}) -> get_app_config(App, cassandra_connect_timeout);
+connect_timeout ({config_mod, Config_Module}) -> Config_Module:cassandra_connect_timeout();
+connect_timeout ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_connect_timeout">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec send_timeout      (config_type()) -> timeout_in_ms().
 %% @doc Get the time allowed for sending a request to cassandra before giving up.
-send_timeout       ({config_mod,  Config_Module}) -> Config_Module:cassandra_send_timeout();
-send_timeout       ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_send_timeout">>, Bindict),
+send_timeout ({config_app_config,    App}) -> get_app_config(App, cassandra_send_timeout);
+send_timeout ({config_mod, Config_Module}) -> Config_Module:cassandra_send_timeout();
+send_timeout ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_send_timeout">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec session_max_count  (config_type()) -> max_connections().
 %% @doc Get the maximum number of live sessions that can be open simultaneously.
-session_max_count  ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_sessions();
-session_max_count  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_sessions">>, Bindict),
+session_max_count ({config_app_config,    App}) -> get_app_config(App, cassandra_max_sessions);
+session_max_count ({config_mod, Config_Module}) -> Config_Module:cassandra_max_sessions();
+session_max_count ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_sessions">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec checkout_max_retry (config_type()) -> max_retries().
 %% @doc Get the number of retries on transient failure when retrieving a live session from the queue.
-checkout_max_retry ({config_mod,  Config_Module}) -> Config_Module:cassandra_max_checkout_retry();
-checkout_max_retry ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_checkout_retry">>, Bindict),
+checkout_max_retry ({config_app_config,    App}) -> get_app_config(App, cassandra_max_checkout_retry);
+checkout_max_retry ({config_mod, Config_Module}) -> Config_Module:cassandra_max_checkout_retry();
+checkout_max_retry ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_max_checkout_retry">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec decay_probability  (config_type()) -> decay_prob().
 %% @doc Get the number of chances in 1 Million that this session will be stochastically recycled before checkin.
-decay_probability  ({config_mod,  Config_Module}) -> Config_Module:cassandra_session_decay_probability();
-decay_probability  ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
+decay_probability ({config_app_config,    App}) -> get_app_config(App, cassandra_session_decay_probability);
+decay_probability ({config_mod, Config_Module}) -> Config_Module:cassandra_session_decay_probability();
+decay_probability ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_session_decay_probability">>, Bindict),
                                                      binary_to_integer(Bin_Value).
 
 -spec seed_node          (config_type()) -> cassandra_node().
 %% @doc Get the seed seestar node from where to retrieve the list of peers.
-seed_node          ({config_mod,  Config_Module}) -> Config_Module:cassandra_seed_node();
-seed_node          ({vbisect,           Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_seed_node">>, Bindict),
-                                                     binary_to_term(Bin_Value).
+seed_node ({config_app_config,    App})  -> get_app_config(App, cassandra_seed_node);
+seed_node ({config_mod, Config_Module}) -> Config_Module:cassandra_seed_node();
+seed_node ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_seed_node">>, Bindict),
+                                           binary_to_term(Bin_Value).
 
 -spec request_peers_frequency(config_type()) -> request_peers_frequency().
 %% @doc Get the time between consecutive seestar peers requests.
-request_peers_frequency({config_mod, Config_Module}) -> Config_Module:cassandra_request_peers_frequency();
-request_peers_frequency({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_peers_frequency">>, Bindict),
-                                                      binary_to_integer(Bin_Value).
+request_peers_frequency ({config_app_config,    App}) -> get_app_config(App, cassandra_request_peers_frequency);
+request_peers_frequency ({config_mod, Config_Module}) -> Config_Module:cassandra_request_peers_frequency();
+request_peers_frequency ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_request_peers_frequency">>, Bindict),
+                                                         binary_to_integer(Bin_Value).
 
 -spec default_port(config_type()) -> inet:port_number().
 %% @doc Get the default port for elysium requests
-default_port({config_mod, Config_Module})          -> Config_Module:cassandra_default_port();
-default_port({vbisect,          Bindict})          -> {ok, Bin_Value} = vbisect:find(<<"cassandra_default_port">>, Bindict),
-                                                      binary_to_integer(Bin_Value).
+default_port ({config_app_config,    App}) -> get_app_config(App, cassandra_default_port);
+default_port ({config_mod, Config_Module}) -> Config_Module:cassandra_default_port();
+default_port ({vbisect,          Bindict}) -> {ok, Bin_Value} = vbisect:find(<<"cassandra_default_port">>, Bindict),
+                                              binary_to_integer(Bin_Value).
 
 boolean_to_binary(true)    -> <<"1">>;
 boolean_to_binary(false)   -> <<"0">>.

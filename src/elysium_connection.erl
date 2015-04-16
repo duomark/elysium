@@ -122,7 +122,7 @@ one_shot_query(Config, {Host, Port} = _Node, Query, Consistency, _Reply_Timeout)
 -spec get_buffer_strategy_module(config_type()) -> {buffering(), buffering_strategy_module()}.
 %% @doc Get the module corresponding to the configured buffering strategy.
 get_buffer_strategy_module(Config) ->
-    true = elysium_config:is_valid_config(Config),
+%%    true = elysium_config:is_valid_config(Config),
     Buffering_Strategy = elysium_config:connection_buffering_strategy(Config),
     BS_Module = case Buffering_Strategy of
                     none     -> elysium_nobs;

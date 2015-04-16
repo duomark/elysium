@@ -1,5 +1,6 @@
 %% Two ways of specifying configuration parameters, designed for high concurrency.
--type config_type() :: {config_mod, module()}
+-type config_type() :: config_app_config
+                     | {config_mod, module()}
                      | {vbisect,    vbisect:bindict()}.
 
 %% Buffering module names are used for telemetry.
