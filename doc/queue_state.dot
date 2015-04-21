@@ -1,0 +1,41 @@
+digraph g {
+
+  graph [fontsize=30 labelloc="t" label="Elysium Queue FSM States" splines=true overlap=false rankdir = "TB"];
+  ratio = auto;
+
+  wait [ style = "filled, bold" penwidth = 5 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+           label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                   <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'WAIT_REGISTER'</font></td></tr>
+                   <tr><td align="left">&#40;0&#41; config_type </td></tr>
+                   <tr><td align="left">&#40;1&#41; load balance queue name </td></tr>
+                   <tr><td align="left">&#40;2&#41; sessions queue name</td></tr>
+                   <tr><td align="left">&#40;3&#41; requests queue name </td></tr>
+                   <tr><td align="left">&#40;4&#41; connection_sup undefined </td></tr></table>> ];
+
+    disabled [ style = "filled, bold" penwidth = 5 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+               label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                       <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'DISABLED'</font></td></tr>
+                       <tr><td align="left">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+
+  subgraph running_states {
+    rank = same
+
+    inactive [ style = "filled, bold" penwidth = 5 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+               label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                       <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'INACTIVE'</font></td></tr>
+                       <tr><td align="left" port="r1">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+
+    active [ style = "filled, bold" penwidth = 5 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+             label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                     <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'ACTIVE'</font></td></tr>
+                     <tr><td align="left" port="r2">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+  }
+
+  wait      -> disabled [ penwidth = 5 fontsize = 28 fontcolor = "blue" label = "register connection"];
+  wait      -> inactive [ penwidth = 5 fontsize = 28 fontcolor = "blue" label = "deactivate" ];
+  disabled  -> inactive [ penwidth = 5 fontsize = 28 fontcolor = "blue" label = "enable" ];
+
+  inactive  -> active   [ penwidth = 5 fontsize = 28 fontcolor = "blue" label = "activate" ];
+  active    -> inactive [ penwidth = 5 fontsize = 28 fontcolor = "blue" label = "deactivate" ];
+
+}

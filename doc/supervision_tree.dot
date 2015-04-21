@@ -1,0 +1,60 @@
+graph ""
+{
+  node  [shape=Mrecord, fontsize=12, width="0.2", height="0.2", margin="0.2,0.2", rankdir=LR];
+  graph [fontsize=10 label="Elysium supervision tree"];
+
+   n1 ; n1 [ label="<l1> elysium_sup\n(rest_for_one)" ];
+
+  subgraph top_level {
+    graph [rank=same];
+
+   n2 [ label="<l2> elysium_buffer_sup\n(ets owner)" ];
+   n3 [ label="<l2> elysium_queue\n(gen_fsm elysium status)" ];
+   n4 [ label="<l2> elysium_lb_queue\n(gen_server round-robin C*)" ];
+   n5 [ label="<l2> elysium_peer_handler\n(node discovery)" ];
+   n6 [ label="<l2> elysium_serial_queue\n(idle C* sessions)" ];
+   n7 [ label="<l2> elysium_serial_queue\n(pending C* requests)" ];
+   n8 [ label="<l2> elysium_connection_sup\n(simple_one_for_one)" ];
+  }
+
+   n81 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
+   n82 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
+   n83 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
+
+  subgraph ets_tables {
+   e1 [ shape=record, label="<l4> Idle Sessions ETS" ];
+   e2 [ shape=record, label="<l4> Pending Requests ETS" ];
+   e3 [ shape=record, label="<l4> Audit Counts ETS" ];
+  }
+
+   status [ label="<l4> Active\nInactive\nDisabled" ];
+
+   q1 [ label="<l4> Idle C* Queue\n\nCheckin\nCheckout" ];
+   q2 [ label="<l4> Pending C* Queue\n\nCheckin\nCheckout" ];
+
+   ch1 [ label="<l4> Cassandra Host 1 | <l5> Cassandra Host 2 | <l6> Cassandra Host 3" ];
+   cn1 [ label="<l4> Cassandra Node 1" ];
+   cn2 [ label="<l4> Cassandra Node 2" ];
+   cn3 [ label="<l4> Cassandra Node 3" ];
+
+   n1:l1:s -- n2:l2:n;
+   n1:l1:s -- n3:l2:n;
+   n1:l1:s -- n4:l2:n;
+   n1:l1:s -- n5:l2:n;
+   n1:l1:s -- n6:l2:n;
+   n1:l1:s -- n7:l2:n;
+   n1:l1:s -- n8:l2:n;
+
+   n2:l1:s -- e1:l4 -- e2:l4 -- e3:l4;
+
+   n3:l1:s -- status:l4 [dir=both];
+
+   n4:l1:s -- ch1:l4;
+   n5:l1:s -- ch1:l5 [dir=forward label="periodically\nupdate"];
+   n6:l1:s -- q1:l4;
+   n7:l1:s -- q2:l4;
+
+   n8:l2 -- n81:l3 -- cn1:l4;
+   n8:l2 -- n82:l3 -- cn2:l4;
+   n8:l2 -- n83:l3 -- cn3:l4;
+}

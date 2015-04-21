@@ -5,7 +5,7 @@
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Elysium_fsm is a gen_fsm that handles client queries about the
+%%%   Elysium_queue is a gen_fsm that handles client queries about the
 %%%   state of the session, pending_requests and load balancing
 %%%   ets_buffer queues. These queues are owned by elysium_buffer_sup
 %%%   but are queried by elysium_queue so that there is no risk of
@@ -76,7 +76,7 @@
 %%%-----------------------------------------------------------------------
 
 -spec start_link(config_type()) -> {ok, pid()}.
-%% @doc Create an ets_buffer FIFO queue using the configured queue name.
+%% @doc Create an gen_fsm for querying the current application status.
 start_link(Config) ->
     true = elysium_config:is_valid_config(Config),
     gen_fsm:start_link({local, ?SERVER}, ?MODULE, {Config}, []).
@@ -145,8 +145,7 @@ code_change(_Old_Vsn, State_Name, #ef_state{} = State, _Extra) ->
 
 %% @private
 %% @doc
-%%   Delete the connection queue, stopping all idle connections have
-%%   already been stopped.
+%%   Delete the connection queue, stopping all idle connections first.
 %% @end        
 terminate(Reason, _State_Name,
           #ef_state{available_hosts=Lb_Queue_Name, live_sessions=Session_Queue_Name}) ->
@@ -177,10 +176,9 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Move to 'INACTIVE' if requested, otherwise stay in 'ACTIVE' state.
 ?active(deactivate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Connections = elysium_config:session_max_count(Config),
-    Kids = supervisor:which_children(Conn_Sup),
-    _ = [supervisor:terminate_child(Conn_Sup, Pid) || {undefined, Pid, _, _} <- Kids],
-    {reply, {length(Kids), Max_Connections}, ?inactive, #ef_state{} = State};
+    Max_Connections  = elysium_config:session_max_count(Config),
+    Num_Disconnected = disconnect(Conn_Sup),
+    {reply, {Num_Disconnected, Max_Connections}, ?inactive, #ef_state{} = State};
 ?active  (_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?active, State}.
 
@@ -196,11 +194,7 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Move to 'ACTIVE' if requested, otherwise stay in 'INACTIVE' state.
 ?inactive(activate, _From, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
-    Max_Connections = elysium_config:session_max_count   (Config),
-    Num_Nodes       = elysium_lb_queue:num_entries(Lb_Queue_Name),
-    _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
+    Max_Connections = connect(Config, Conn_Sup),
     {reply, Max_Connections, ?active, State};
 ?inactive(_Any, _From, #ef_state{} = State) ->
     {reply, ok, ?inactive, State}.
@@ -219,8 +213,7 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Deactivate if requested, from the 'ACTIVE' state.
 ?active(deactivate, #ef_state{connection_sup=Conn_Sup} = State) ->
-    Kids = supervisor:which_children(Conn_Sup),
-    _ = [supervisor:terminate_child(Conn_Sup, Id) || {Id, _, _, _} <- Kids],
+    _ = disconnect(Conn_Sup),
     {next_state, ?inactive, State};
 ?active(_Other, #ef_state{} = State) ->
     {next_state, ?active,   State}.
@@ -235,11 +228,7 @@ terminate(Reason, _State_Name,
 %% @private
 %% @doc Activate if requested, from the 'INACTIVE' state.
 ?inactive(activate, #ef_state{config=Config, connection_sup=Conn_Sup} = State) ->
-    Max_Connections = elysium_config:session_max_count   (Config),
-    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
-    Num_Nodes       = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
-    _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
-         || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
+    _ = connect(Config, Conn_Sup),
     {next_state, ?active, State};
 ?inactive(_Other, #ef_state{} = State) ->
     {next_state, ?inactive, State}.
@@ -249,6 +238,20 @@ terminate(Reason, _State_Name,
 %% @doc Deactivate if requested, from the 'WAIT_REGISTER' state.
 ?wait_register(deactivate, #ef_state{} = State) -> {next_state, ?inactive,      State};
 ?wait_register(_Other,     #ef_state{} = State) -> {next_state, ?wait_register, State}.
+
+
+connect(Config, Conn_Sup) ->
+    Max_Connections = elysium_config:session_max_count   (Config),
+    Lb_Queue_Name   = elysium_config:load_balancer_queue (Config),
+    Num_Nodes       = ets_buffer:num_entries_dedicated (Lb_Queue_Name),
+    _ = [spawn_monitor(elysium_connection_sup, start_child, [Conn_Sup, [Config]])
+         || _N <- lists:seq(1, Max_Connections * Num_Nodes)],
+    Max_Connections.
+
+disconnect(Conn_Sup) ->
+    Kids = supervisor:which_children(Conn_Sup),
+    _ = [supervisor:terminate_child(Conn_Sup, Pid) || {undefined, Pid, _, _} <- Kids],
+    length(Kids).
 
 
 %%%-----------------------------------------------------------------------
@@ -287,7 +290,7 @@ handle_sync_event(get_connection_supervisor, _From, State_Name, #ef_state{} = St
 
 handle_sync_event(current_state, _From, ?active,        #ef_state{} = State) -> {reply, active,        ?active,        State};
 handle_sync_event(current_state, _From, ?disabled,      #ef_state{} = State) -> {reply, disabled,      ?disabled,      State};
-handle_sync_event(current_state, _From, ?inactive,      #ef_state{} = State) -> {reply, active,        ?inactive,      State};
+handle_sync_event(current_state, _From, ?inactive,      #ef_state{} = State) -> {reply, inactive,      ?inactive,      State};
 handle_sync_event(current_state, _From, ?wait_register, #ef_state{} = State) -> {reply, wait_register, ?wait_register, State}.
 
 
@@ -312,8 +315,7 @@ handle_event(_Any, State_Name, #ef_state{} = State) ->
 %% @doc Unused function.
 handle_info ({'DOWN', _Ref, process,  Connection_Attempt, Reason}, State_Name, #ef_state{} = State) ->
     Reason =:= normal
-        orelse lager:warn("Elysium connection in process ~p could not be established: ~p~n",
-                          [Connection_Attempt, Reason]),
+        orelse lager:warn("Elysium connection in process ~p could not be established: ~p~n", [Connection_Attempt, Reason]),
     {next_state, State_Name, State};
 handle_info (_Any, State_Name, #ef_state{} = State) ->
     {next_state, State_Name, State}.

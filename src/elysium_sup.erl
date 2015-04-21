@@ -71,7 +71,6 @@ init({Config}) ->
     Pending_Queue_Name = elysium_config:requests_queue_name (Config),
     Buffer_Sup  = ?SUPER(elysium_buffer_sup,       [Config]),
     Queue_Proc  = ?CHILD(elysium_queue,            [Config]),
-    Enq_Proc    = ?CHILD(elysium_session_enqueuer, [Config]),
     Discovery_Proc = ?CHILD(elysium_peer_handler,  [Config]),
     Conn_Sup    = ?SUPER(elysium_connection_sup,         []),
 
@@ -81,7 +80,6 @@ init({Config}) ->
 
     {ok, {{rest_for_one, 10, 10},
           [Buffer_Sup, Queue_Proc,                       % Ets owner and status reporter
-           Enq_Proc,                                     % Serial writer hack for parallel ets
            Serial_LB_Queue,                              % Queue for peer nodes
            Discovery_Proc,                               % Detects peer nodes and refreshes the buffers
            Serial_Session_Queue, Serial_Pending_Queue,   % Queue gen_servers for serial option
