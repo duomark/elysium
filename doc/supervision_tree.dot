@@ -22,12 +22,8 @@ graph ""
    n83 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
 
   subgraph ets_tables {
-   e1 [ shape=record, label="<l4> Idle Sessions ETS" ];
-   e2 [ shape=record, label="<l4> Pending Requests ETS" ];
-   e3 [ shape=record, label="<l4> Audit Counts ETS" ];
+   e1 [ shape=Mrecord, label="{<l4> ETS Tables | Idle Sessions |  Pending Requests | Audit Counts}" ];
   }
-
-   status [ label="<l4> Active\nInactive\nDisabled" ];
 
    q1 [ label="<l4> Idle C* Queue\n\nCheckin\nCheckout" ];
    q2 [ label="<l4> Pending C* Queue\n\nCheckin\nCheckout" ];
@@ -45,9 +41,7 @@ graph ""
    n1:l1:s -- n7:l2:n;
    n1:l1:s -- n8:l2:n;
 
-   n2:l1:s -- e1:l4 -- e2:l4 -- e3:l4;
-
-   n3:l1:s -- status:l4 [dir=both];
+   n2:l1:s -- e1:l4;
 
    n4:l1:s -- ch1:l4;
    n5:l1:s -- ch1:l5 [dir=forward label="periodically\nupdate"];
@@ -57,4 +51,45 @@ graph ""
    n8:l2 -- n81:l3 -- cn1:l4;
    n8:l2 -- n82:l3 -- cn2:l4;
    n8:l2 -- n83:l3 -- cn3:l4;
+
+
+  # State machine for querying elyisum status
+
+  wait [ style = "filled" penwidth = 1 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+           label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                   <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'WAIT_REGISTER'</font></td></tr>
+                   <tr><td align="left">&#40;0&#41; config_type </td></tr>
+                   <tr><td align="left">&#40;1&#41; load balance queue name </td></tr>
+                   <tr><td align="left">&#40;2&#41; sessions queue name</td></tr>
+                   <tr><td align="left">&#40;3&#41; requests queue name </td></tr>
+                   <tr><td align="left">&#40;4&#41; connection_sup undefined </td></tr></table>> ];
+
+  subgraph running_states {
+    rank = same
+
+    disabled [ style = "filled" penwidth = 1 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+               label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                       <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'DISABLED'</font></td></tr>
+                       <tr><td align="left">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+
+    inactive [ style = "filled" fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+               label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                       <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'INACTIVE'</font></td></tr>
+                       <tr><td align="left" port="r1">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+
+    active [ style = "filled" fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+             label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
+                     <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'ACTIVE'</font></td></tr>
+                     <tr><td align="left" port="r2">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+  }
+
+  n3:l1:s -- wait [dir=both];
+
+  wait      -- disabled [ dir=forward fontsize = 18 fontcolor = "blue" label = "register connection"];
+  wait      -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "deactivate" ];
+  disabled  -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "enable" ];
+
+  inactive  -- active   [ dir=forward fontsize = 18 fontcolor = "blue" label = "activate" ];
+  active    -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "deactivate" ];
+
 }
