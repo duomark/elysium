@@ -50,10 +50,6 @@ To check that the types are properly specified, make the plt and run dialyzer:
 
 Travis CI
 =========
-
-[![Build Status](https://travis-ci.org/duomark/elysium.png?branch=master)](https://travis-ci.org/duomark/elysium)
-
-
-[Travis-CI](http://about.travis-ci.org/) provides Continuous Integration. Travis automatically builds and runs the unit tests whenever the code is modified. The status of the current build is shown in the image badge directly above this paragraph.
+[Travis-CI](http://about.travis-ci.org/) provides Continuous Integration. Travis automatically builds and runs the unit tests whenever the code is modified. The status of the current build is shown in the image badge at the top of this page.
 
 Integration with Travis is provided by the [.travis.yml file](https://raw.github.com/duomark/erlangsp/master/.travis.yml). The automated build is run on R16B03.
