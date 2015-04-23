@@ -35,8 +35,7 @@
 
          activate/0,
          deactivate/0,
-         enable/0,
-         node_change/1
+         enable/0
         ]).
 
 %% FSM states
@@ -107,11 +106,6 @@ deactivate() ->
 %% @doc Change disabled to inactive state, allowing new session creation.
 enable() ->
     gen_fsm:sync_send_event(?SERVER, enable).
-
--spec node_change([{inet:hostname(), inet:port_number()}]) -> ok.
-%% @doc Notifies the queue that the node list changed
-node_change(Nodes) ->
-    gen_fsm:sync_send_event(?SERVER, {node_change, Nodes}).
 
 
 %%%-----------------------------------------------------------------------
