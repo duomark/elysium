@@ -1,6 +1,6 @@
 graph ""
 {
-  node  [shape=Mrecord, fontsize=12, width="0.2", height="0.2", margin="0.2,0.2", rankdir=LR];
+  node  [shape=Mrecord, fontsize=12, width=0.2, height=0.2, margin="0.2,0.2", rankdir=LR];
   graph [fontsize=10 label="Elysium supervision tree"];
 
    n1 ; n1 [ label="<l1> elysium_sup\n(rest_for_one)" ];
@@ -17,21 +17,18 @@ graph ""
    n8 [ label="<l2> elysium_connection_sup\n(simple_one_for_one)" ];
   }
 
-   n81 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
-   n82 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
-   n83 [ label="<l3> elysium_connection\n(seestar gen_server)" ];
+   n81 [ fontcolor=red label="<l3> elysium_connection\n(seestar gen_server)" ];
+   n82 [ fontcolor=red label="<l3> elysium_connection\n(seestar gen_server)" ];
+   n83 [ fontcolor=red label="<l3> elysium_connection\n(seestar gen_server)" ];
 
   subgraph ets_tables {
-   e1 [ shape=Mrecord, label="{<l4> ETS Tables | Idle Sessions |  Pending Requests | Audit Counts}" ];
+   e1 [ shape=Mrecord, label="{<l4> ETS Tables | Idle Sessions\n(parallel only) |  Pending Requests\n(parallel only) | Audit Counts}" ];
   }
 
    q1 [ label="<l4> Idle C* Queue\n\nCheckin\nCheckout" ];
    q2 [ label="<l4> Pending C* Queue\n\nCheckin\nCheckout" ];
 
    ch1 [ label="<l4> Cassandra Host 1 | <l5> Cassandra Host 2 | <l6> Cassandra Host 3" ];
-   cn1 [ label="<l4> Cassandra Node 1" ];
-   cn2 [ label="<l4> Cassandra Node 2" ];
-   cn3 [ label="<l4> Cassandra Node 3" ];
 
    n1:l1:s -- n2:l2:n;
    n1:l1:s -- n3:l2:n;
@@ -48,14 +45,12 @@ graph ""
    n6:l1:s -- q1:l4;
    n7:l1:s -- q2:l4;
 
-   n8:l2 -- n81:l3 -- cn1:l4;
-   n8:l2 -- n82:l3 -- cn2:l4;
-   n8:l2 -- n83:l3 -- cn3:l4;
-
-
   # State machine for querying elyisum status
+  {
+    rankdir = TB;
+    rank = same;
 
-  wait [ style = "filled" penwidth = 1 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+    wait [ style=filled penwidth=1 fillcolor=white fontname="Courier New" shape=Mrecord
            label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
                    <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'WAIT_REGISTER'</font></td></tr>
                    <tr><td align="left">&#40;0&#41; config_type </td></tr>
@@ -64,32 +59,52 @@ graph ""
                    <tr><td align="left">&#40;3&#41; requests queue name </td></tr>
                    <tr><td align="left">&#40;4&#41; connection_sup undefined </td></tr></table>> ];
 
+     register       [ label="Register Connection" ];
+     config_enabled [ label="Config Enabled?" shape=Mdiamond margin=0.1 ];
+
+     cn1 [ label="<l4> Cassandra Node 1" ];
+     cn2 [ label="<l4> Cassandra Node 2" ];
+     cn3 [ label="<l4> Cassandra Node 3" ];
+  }
+
   subgraph running_states {
     rank = same
 
-    disabled [ style = "filled" penwidth = 1 fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+    disabled [ style=filled penwidth=1 fillcolor=white fontname="Courier New" shape=Mrecord
                label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
                        <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'DISABLED'</font></td></tr>
                        <tr><td align="left">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
 
-    inactive [ style = "filled" fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+    inactive [ style=filled fillcolor=white fontname="Courier New" shape=Mrecord
                label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
                        <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'INACTIVE'</font></td></tr>
-                       <tr><td align="left" port="r1">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+                       <tr><td align="left" port="r1">&#40;4&#41; connection_sup Pid </td></tr>
+                       <tr><td align="left" port="r1"><font color="red">&#40;5&#41; terminate elysium_connections</font></td></tr>
+                       </table>> ];
 
-    active [ style = "filled" fillcolor = "white" fontname = "Courier New" shape = "Mrecord"
+    active [ style=filled fillcolor=white fontname="Courier New" shape=Mrecord
              label =<<table border="0" cellborder="0" cellpadding="3" bgcolor="white">
                      <tr><td bgcolor="black" align="center" colspan="2"><font color="white">'ACTIVE'</font></td></tr>
-                     <tr><td align="left" port="r2">&#40;4&#41; connection_sup Pid </td></tr></table>> ];
+                     <tr><td align="left" port="r2">&#40;4&#41; connection_sup Pid </td></tr>
+                     <tr><td align="left" port="r1"><font color="red">&#40;5&#41; create elysium_connections</font></td></tr>
+                     </table>> ];
   }
 
-  n3:l1:s -- wait [dir=both];
+   n8:l2 -- n81:l3 -- cn1:l4;
+   n8:l2 -- n82:l3 -- cn2:l4;
+   n8:l2 -- n83:l3 -- cn3:l4;
 
-  wait      -- disabled [ dir=forward fontsize = 18 fontcolor = "blue" label = "register connection"];
-  wait      -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "deactivate" ];
-  disabled  -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "enable" ];
 
-  inactive  -- active   [ dir=forward fontsize = 18 fontcolor = "blue" label = "activate" ];
-  active    -- inactive [ dir=forward fontsize = 18 fontcolor = "blue" label = "deactivate" ];
+  n3:l1:s -- wait [dir=forward];
 
+  wait -- register;
+  register -- config_enabled  [ dir=forward fontsize=18 fontcolor=blue label= "register connection"];
+  config_enabled  -- disabled [ dir=forward fontsize=18 fontcolor=blue label= "no" ];
+  config_enabled  -- inactive [ dir=forward fontsize=18 fontcolor=blue label= "yes"  ];
+  disabled        -- inactive [ dir=forward fontsize=18 fontcolor=blue label= "enable" ];
+  inactive        -- disabled [ dir=forward fontsize=18 fontcolor=blue label= "disable" ];
+
+  inactive  -- active    [ dir=forward fontsize=18 fontcolor=blue label="activate" ];
+  active    -- inactive  [ dir=forward fontsize=18 fontcolor=blue label="deactivate" ];
+  n8 -- init -- register [ dir=forward];
 }
