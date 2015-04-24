@@ -16,7 +16,6 @@ relx
 *.html
 *.o
 *.plt
-*.png
 *.log
 *.swp
 erl_crash.dump

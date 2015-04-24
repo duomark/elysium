@@ -82,5 +82,5 @@ init({Config}) ->
           [Buffer_Sup, Queue_Proc,                       % Ets owner and status reporter
            Serial_LB_Queue,                              % Queue for peer nodes
            Discovery_Proc,                               % Detects peer nodes and refreshes the buffers
-           Serial_Session_Queue, Serial_Pending_Queue,   % Queue gen_servers for serial option
+           Serial_Pending_Queue, Serial_Session_Queue,   % Queue gen_servers for serial option
            Conn_Sup]}}.                                  % Connection worker supervisor

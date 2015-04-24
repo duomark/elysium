@@ -21,6 +21,7 @@ Releases
     * Eliminate elysium_session_enqueuer module
     * Remove unused elysium_queue:node_change/1
     * Add Cassandra node reporting on connection errors
+    * Move pending requests earlier than connection queue in supervisor
 
 ### <a name="0.2.2"></a>0.2.2 Add app.config configuration option
 

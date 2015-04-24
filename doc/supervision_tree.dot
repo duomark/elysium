@@ -12,8 +12,8 @@ graph ""
    n3 [ label="<l2> elysium_queue\n(gen_fsm elysium status)" ];
    n4 [ label="<l2> elysium_lb_queue\n(gen_server round-robin C*)" ];
    n5 [ label="<l2> elysium_peer_handler\n(node discovery)" ];
-   n6 [ label="<l2> elysium_serial_queue\n(idle C* sessions)" ];
-   n7 [ label="<l2> elysium_serial_queue\n(pending C* requests)" ];
+   n6 [ label="<l2> elysium_serial_queue\n(pending C* requests)" ];
+   n7 [ label="<l2> elysium_serial_queue\n(idle C* sessions)" ];
    n8 [ label="<l2> elysium_connection_sup\n(simple_one_for_one)" ];
   }
 
