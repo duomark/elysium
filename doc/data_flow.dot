@@ -1,0 +1,51 @@
+digraph G {
+    rankdir = LR;
+    label = "Elysium Data Flows";
+    fontcolor = red;
+
+    create   [ shape=Mrecord label = " <cc> Create Connections\n(Round Robin DB Cluster) | <lb> Load Balance Queue | lb3 | lb2 | lb1" ];
+    Query    [ shape=box label = "DB Query" ];
+    pq       [ shape=Mrecord label = " Pending\nRequest\nQueue | <r5> req5 | <r4> req4 | <r3> req3 | <r2> req2 | <r1> req1" ];
+
+    subgraph pair2 {
+      rank = same;
+
+      checkin  [ shape=box color=blue ];
+      decay    [ shape=Mdiamond label = "Decay Connection?"];
+      pending  [ shape=Mdiamond label = "Pending Requests?"];
+      cq       [ shape=Mrecord  label = "Idle\nConnection\nQueue | <c5> cxn5 | <c4> cxn4 | <c3> cxn3 | <c2> cxn2 | <c1> cxn1" ];
+      socket   [ shape=Mdiamond label = "Connections Available?" ];
+      checkout [ shape=box color=blue ];
+    }
+
+   activate  -> create:cc   [ label="init config:max_sessions" fontcolor=blue ];
+   create:cc -> pending:w;
+
+   cq -> checkout;
+   with_cxn:n -> checkout:w;
+
+   pending:e -> pq [ label="Yes" fontcolor=blue ];
+   pq -> Query;
+
+   checkin:s -> pending;
+   pending:s -> decay:n;
+   decay:w -> create:lb  [ label="Yes\n(not on first create)" fontcolor=blue ];
+   decay -> cq           [ label="No"  fontcolor=blue ];
+
+   subgraph {
+     rank=min;
+
+     activate   [ shape=box fontcolor=red label = "elysium_queue:activate" ];
+     one_shot       [ shape=box color=blue fontcolor=red label="elysium_connection:one_shot_query" ];
+     destroy        [ shape=box color=blue label="Close Connection" ];
+     one_shot_query [ shape=box label="DB Query" ];
+     with_cxn  [ shape=box color=blue fontcolor=red label="elysium_connection:with_connection" ];
+   }
+
+
+   checkout:e -> socket:w;
+   socket:s   -> Query:s   [ fontcolor=blue label="Yes" ];
+   socket:e   -> pq:s      [ fontcolor=blue label="No" ];
+   Query:n    -> checkin:e;
+   one_shot   -> create:lb -> one_shot_query -> destroy;
+}
